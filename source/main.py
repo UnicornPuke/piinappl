@@ -20,6 +20,7 @@ TT_KEYWORD = 'KEYWORD'
 TT_IDENTIFIER = 'IDENTIFIER'
 TT_EQ = 'EQ'
 TT_EOF = 'EOF'
+TT_COLON = "COLON"
 
 class Error:
     def __init__(self, pos_start, pos_end, error_code, details, context=None):
@@ -36,10 +37,17 @@ class Error:
             self.error_name = "Unclosed Grouping"
         if self.error_code == 301:
             self.error_name = "Division by zero"
-        
+        if self.error_code == 302:
+            self.error_name = "Symbol not defined"
+        if self.error_code == 303:
+            self.error_name = "Symbol already defined"
+        if self.error_code == 304:
+            self.error_name = f"Cannot operate {details[0]} with {details[1]}"
     def as_string(self):
         if self.error_code > 300:
             result = self.generate_traceback()
+            if self.error_code == 304:
+                self.details = ''
             result += cs(f'Error code {self.error_code} - {self.error_name}: {self.details}', "Red2")
             result += '\n\n' + string_with_arrows(self.pos_start.ftxt, self.pos_start, self.pos_end)
         else:
@@ -65,7 +73,25 @@ class Context:
         self.display_name = display_name
         self.parent_entry_pos = parent_entry_pos
         self.parent = parent
+        self.symbol_table = None
+
+class SymbolTable:
+    def __init__(self):
+        self.symbols = {}
+        self.parent = None
+        
+    def get(self,name):
+        value = self.symbols.get(name, None)
+        if value == None and self.parent:
+            return self.parent.get(name)
+        return value
     
+    def set_(self,name,value):
+        self.symbols[name] = value
+        
+    def remove(self,name):
+        del self.symbols[name]
+
 class Position:
     def __init__(self, idx, ln, col, fn, ftxt):
         self.idx = idx
@@ -99,6 +125,9 @@ class Token:
             
         if pos_end:
             self.pos_end = pos_end
+            
+    def matches(self, type_, value):
+        return self.type == type_ and self.value == value
         
     def __repr__(self):
         if self.value: return f'{self.type}:{self.value}'
@@ -134,6 +163,9 @@ class Lexer:
             elif self.current_char == "/":
                 tokens.append(Token(TT_DIV,pos_start=self.pos))
                 self.advance()
+            elif self.current_char == ":":
+                tokens.append(Token(TT_COLON,pos_start=self.pos))
+                self.advance()
             elif self.current_char == "(":
                 tokens.append(Token(TT_LPAREN,pos_start=self.pos))
                 self.advance()
@@ -163,7 +195,6 @@ class Lexer:
                 return [], Error(pos_start, self.pos, 101, '"' + char + '"')
             
         tokens.append(Token(TT_EOF, pos_start=self.pos))
-        print(tokens)
         return tokens, None
     
     def make_number(self):
@@ -188,13 +219,29 @@ class Lexer:
     def make_words(self):
         string = ''
         pos_start = self.pos.copy()
-        while self.current_char != None and self.current_char in LETTERSDIGITS:
+        while self.current_char != None and self.current_char in LETTERSDIGITS + '_':
             string += self.current_char
             self.advance()
         if string in KEYWORDS:
             return Token(TT_KEYWORD, string, pos_start, self.pos)
         else:
             return Token(TT_IDENTIFIER, string, pos_start, self.pos)
+
+class VarAccessNode:
+    def __init__(self, var_name_tok):
+        self.var_name_tok = var_name_tok
+        
+        self.pos_start = self.var_name_tok.pos_start
+        self.pos_end = self.var_name_tok.pos_end
+        
+class VarAssignNode:
+    def __init__(self, var_name_tok, value_node, var_type):
+        self.var_name_tok = var_name_tok
+        self.value_node = value_node
+        self.var_type = var_type
+        
+        self.pos_start = self.var_name_tok.pos_start
+        self.pos_end = self.value_node.pos_end
         
 class NumberNode:
     def __init__(self, tok):
@@ -205,6 +252,26 @@ class NumberNode:
         
     def __repr__(self):
         return f'{self.tok}'
+    
+class BooleanNode:
+    def __init__(self, tok):
+        self.tok = tok
+        
+        self.pos_start = self.tok.pos_start
+        self.pos_end = self.tok.pos_end
+        
+    def __repr__(self):
+        return f'{self.tok}'
+    
+class NoneTypeNode:
+    def __init__(self, tok):
+        self.tok = tok
+        
+        self.pos_start = self.tok.pos_start
+        self.pos_end = self.tok.pos_end
+        
+    def __repr__(self):
+        return 'None'
     
 class BinOpNode:
     def __init__(self, left_node, op_tok, right_node):
@@ -283,8 +350,16 @@ class Parser:
         elif tok.type == TT_NUM:
             res.register(self.advance())
             return res.success(NumberNode(tok))
-        
-        return res.failure(Error(tok.pos_start, tok.pos_end, 201, "Number"))
+        elif tok.type == TT_IDENTIFIER:
+            res.register(self.advance())
+            if tok.value == "False":
+                return res.success(BooleanNode(tok))
+            if tok.value == "True":
+                return res.success(BooleanNode(tok))
+            if tok.value == "None":
+                return res.success(NoneTypeNode(tok))
+            return res.success(VarAccessNode(tok))
+        return res.failure(Error(tok.pos_start, tok.pos_end, 201, "Expression or Number"))
         
     def parse(self):
         res = self.expr()
@@ -299,6 +374,43 @@ class Parser:
         return self.bin_op(self.power, [TT_MUL, TT_DIV])
     
     def expr(self):
+        res = ParseResult()
+        if self.current_tok.matches(TT_KEYWORD, 'def') or self.current_tok.matches(TT_KEYWORD, 'manip'):
+            var_type = self.current_tok.value
+            res.register(self.advance())
+            
+            if self.current_tok.type != TT_COLON:
+                return res.failure(Error(self.current_tok.pos_start, self.current_tok.pos_end, 201, '":"'))
+            
+            res.register(self.advance())
+            
+            if self.current_tok.type != TT_LPAREN:
+                return res.failure(Error(self.current_tok.pos_start, self.current_tok.pos_end, 201, '"("'))
+            
+            res.register(self.advance())
+            parenpos = self.current_tok.pos_start.copy()
+            
+            if self.current_tok.type != TT_IDENTIFIER:
+                return res.failure(Error(self.current_tok.pos_start, self.current_tok.pos_end, 201, 'Identifier'))
+            
+            var_name = self.current_tok
+            res.register(self.advance())
+            
+            if self.current_tok.type != TT_EQ:
+                return res.failure(Error(self.current_tok.pos_start, self.current_tok.pos_end, 201, '"="'))
+            
+            res.register(self.advance())
+            expr = res.register(self.expr())
+            if res.error:
+                return res
+            
+            if self.current_tok.type != TT_RPAREN:
+                return res.failure(Error(parenpos, self.current_tok.pos_end, 202, 'Parenthesis'))
+            
+            res.register(self.advance())
+            
+            return res.success(VarAssignNode(var_name, expr, var_type))
+            
         return self.bin_op(self.term, [TT_PLUS, TT_MINUS])
     
     def bin_op(self, func, ops):
@@ -337,23 +449,33 @@ class Number:
         self.value = value
         self.set_pos()
         self.set_context()
+        self.type = "Number"
         
     def set_pos(self, pos_start=None, pos_end=None):
         self.pos_start = pos_start
         self.pos_end = pos_end
         return self
-    
+
     def added_to(self, other):
         if isinstance(other, Number):
             return Number(self.value + other.value).set_context(self.context), None
+        return None, Error(other.pos_start, other.pos_end,
+                    304, ["Number", other.type], self.context
+                )
 
     def subbed_by(self, other):
         if isinstance(other, Number):
             return Number(self.value - other.value).set_context(self.context), None
+        return None, Error(other.pos_start, other.pos_end,
+                    304, ["Number", other.type], self.context
+                )
 
     def multed_by(self, other):
         if isinstance(other, Number):
             return Number(self.value * other.value).set_context(self.context), None
+        return None, Error(other.pos_start, other.pos_end,
+                    304, ["Number", other.type], self.context
+                )
 
     def dived_by(self, other):
         if isinstance(other, Number):
@@ -364,10 +486,16 @@ class Number:
                 )
 
             return Number(self.value / other.value).set_context(self.context), None
+        return None, Error(other.pos_start, other.pos_end,
+                    304, ["Number", other.type], self.context
+                )
         
     def powed_by(self, other):
         if isinstance(other, Number):
             return Number(self.value ** other.value).set_context(self.context), None
+        return None, Error(other.pos_start, other.pos_end,
+                    304, ["Number", other.type], self.context
+                )
 
         
     def set_context(self, context=None):
@@ -376,6 +504,93 @@ class Number:
         
     def __repr__(self):
         return str(self.value)
+    
+class Boolean:
+    def __init__(self, value):
+        self.value = value
+        self.set_pos()
+        self.set_context()
+        self.type = "Boolean"
+        
+    def set_pos(self, pos_start=None, pos_end=None):
+        self.pos_start = pos_start
+        self.pos_end = pos_end
+        return self
+    
+    def added_to(self, other):
+        return None, Error(other.pos_start, other.pos_end,
+                    304, ["Boolean", other.type], self.context
+                )
+
+    def subbed_by(self, other):
+        return None, Error(other.pos_start, other.pos_end,
+                    304, ["Boolean", other.type], self.context
+                )
+
+    def multed_by(self, other):
+        return None, Error(other.pos_start, other.pos_end,
+                    304, ["Boolean", other.type], self.context
+                )
+
+    def dived_by(self, other):
+        return None, Error(other.pos_start, other.pos_end,
+                    304, ["Boolean", other.type], self.context
+                )
+        
+    def powed_by(self, other):
+        return None, Error(other.pos_start, other.pos_end,
+                    304, ["Boolean", other.type], self.context
+                )
+        
+    def set_context(self, context=None):
+        self.context = context
+        return self
+        
+    def __repr__(self):
+        return str(bool(self.value))
+
+class NoneType:
+    def __init__(self):
+        self.set_pos()
+        self.set_context()
+        self.type = "None"
+        
+    def set_pos(self, pos_start=None, pos_end=None):
+        self.pos_start = pos_start
+        self.pos_end = pos_end
+        return self
+    
+    def added_to(self, other):
+        return None, Error(other.pos_start, other.pos_end,
+                    304, ["None", other.type], self.context
+                )
+
+    def subbed_by(self, other):
+        return None, Error(other.pos_start, other.pos_end,
+                    304, ["None", other.type], self.context
+                )
+
+    def multed_by(self, other):
+        return None, Error(other.pos_start, other.pos_end,
+                    304, ["None", other.type], self.context
+                )
+
+    def dived_by(self, other):
+        return None, Error(other.pos_start, other.pos_end,
+                    304, ["None", other.type], self.context
+                )
+        
+    def powed_by(self, other):
+        return None, Error(other.pos_start, other.pos_end,
+                    304, ["None", other.type], self.context
+                )
+    
+    def set_context(self, context=None):
+        self.context = context
+        return self
+        
+    def __repr__(self):
+        return "None"
         
     
 class Interpreter:
@@ -387,8 +602,48 @@ class Interpreter:
     def no_visit_method(self, node, context):
         raise Exception(f'[INTERNAL] Error code 401 - No visit method defnied: {type(node).__name__}')
     
+    def visit_VarAccessNode(self, node, context):
+        res = RTResult()
+        var_name = node.var_name_tok.value
+        value = context.symbol_table.get(var_name)
+        
+        if not value:
+            return res.failure(Error(node.pos_start, node.pos_end, 302, var_name, context))
+        
+        return res.success(value)
+    
+    def visit_VarAssignNode(self, node, context):
+        res = RTResult()
+        var_name = node.var_name_tok.value
+        value = res.register(self.visit(node.value_node, context))
+        var_type = node.var_type
+        
+        if res.error:
+            return res
+        
+        if var_type == 'def':
+            if context.symbol_table.get(var_name):
+                return res.failure(Error(node.pos_start, node.pos_end, 303, var_name, context))
+            context.symbol_table.set_(var_name, value)
+        else:
+            if not context.symbol_table.get(var_name):
+                return res.failure(Error(node.pos_start, node.pos_end, 302, var_name, context))
+            context.symbol_table.set_(var_name, value)
+            
+        return res.success(value)
+    
     def visit_NumberNode(self, node, context):
         return RTResult().success(Number(node.tok.value).set_context(context).set_pos(node.pos_start, node.pos_end))
+    
+    def visit_BooleanNode(self, node, context):
+        if node.tok.value == "False":
+            node.tok.value = 0
+        else:
+            node.tok.value = 1
+        return RTResult().success(Boolean(node.tok.value).set_context(context).set_pos(node.pos_start, node.pos_end))
+    
+    def visit_NoneTypeNode(self, node, context):
+        return RTResult().success(NoneType().set_context(context).set_pos(node.pos_start, node.pos_end))
         
     def visit_BinOpNode(self, node, context):
         res = RTResult()
@@ -429,6 +684,11 @@ class Interpreter:
         else:    
             return res.success(number.set_context(context).set_pos(node.pos_start, node.pos_end))
         
+global_symbol_table = SymbolTable()
+global_symbol_table.set_("True", Boolean(1))
+global_symbol_table.set_("False", Boolean(0))
+global_symbol_table.set_("None", NoneType())
+        
 def run(text):
     lexer = Lexer("<stdin>", text)
     tokens, error = lexer.make_tokens()
@@ -440,6 +700,7 @@ def run(text):
     
     interpreter = Interpreter()
     context = Context('<shell>')
+    context.symbol_table = global_symbol_table
     result = interpreter.visit(ast.node, context)
     
     return result.value, result.error
