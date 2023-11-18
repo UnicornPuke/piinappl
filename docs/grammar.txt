@@ -1,5 +1,11 @@
 expr : term ((PLUS|MINUS) term)*
+     : KEYWORD:def LPAREN IDENTIFIER EQ expr RPAREN
+     : KEYWORD:manip LPAREN IDENTIFIER[defined] EQ expr RPAREN
 
-term : factor ((MUL|DIV) factor)*
+term : power ((MUL|DIV) power)*
+
+power : factor (POWER factor)*
 
 factor : NUM
+       : (PLUS|MINUS) factor
+       : LPAREN expr RPAREN
