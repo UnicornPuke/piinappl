@@ -43,6 +43,8 @@ class Error:
             self.error_name = "Symbol already defined"
         if self.error_code == 304:
             self.error_name = f"Cannot operate {details[0]} with {details[1]}"
+        if self.error_code == 305:
+            self.error_name = f"Cannot manipulate preset symbol"
     def as_string(self):
         if self.error_code > 300:
             result = self.generate_traceback()
@@ -359,23 +361,7 @@ class Parser:
             if tok.value == "None":
                 return res.success(NoneTypeNode(tok))
             return res.success(VarAccessNode(tok))
-        return res.failure(Error(tok.pos_start, tok.pos_end, 201, "Expression or Number"))
-        
-    def parse(self):
-        res = self.expr()
-        if not res.error and self.current_tok.type != TT_EOF:
-            return res.failure(Error(self.current_tok.pos_start, self.current_tok.pos_end, 201, "Operation"))
-        return res
-    
-    def power(self):
-        return self.bin_op(self.factor, [TT_POWER])
-    
-    def term(self):
-        return self.bin_op(self.power, [TT_MUL, TT_DIV])
-    
-    def expr(self):
-        res = ParseResult()
-        if self.current_tok.matches(TT_KEYWORD, 'def') or self.current_tok.matches(TT_KEYWORD, 'manip'):
+        elif self.current_tok.matches(TT_KEYWORD, 'def') or self.current_tok.matches(TT_KEYWORD, 'manip'):
             var_type = self.current_tok.value
             res.register(self.advance())
             
@@ -410,7 +396,21 @@ class Parser:
             res.register(self.advance())
             
             return res.success(VarAssignNode(var_name, expr, var_type))
-            
+        return res.failure(Error(tok.pos_start, tok.pos_end, 201, "Expression or Number"))
+        
+    def parse(self):
+        res = self.expr()
+        if not res.error and self.current_tok.type != TT_EOF:
+            return res.failure(Error(self.current_tok.pos_start, self.current_tok.pos_end, 201, "Operation"))
+        return res
+    
+    def power(self):
+        return self.bin_op(self.factor, [TT_POWER])
+    
+    def term(self):
+        return self.bin_op(self.power, [TT_MUL, TT_DIV])
+    
+    def expr(self):
         return self.bin_op(self.term, [TT_PLUS, TT_MINUS])
     
     def bin_op(self, func, ops):
@@ -626,6 +626,8 @@ class Interpreter:
                 return res.failure(Error(node.pos_start, node.pos_end, 303, var_name, context))
             context.symbol_table.set_(var_name, value)
         else:
+            if var_name in ["True", "False", "None"]:
+                return res.failure(Error(node.pos_start, node.pos_end, 305, var_name, context))
             if not context.symbol_table.get(var_name):
                 return res.failure(Error(node.pos_start, node.pos_end, 302, var_name, context))
             context.symbol_table.set_(var_name, value)
