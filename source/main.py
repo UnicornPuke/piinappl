@@ -4,7 +4,7 @@ import string
 
 DIGITS = '0123456789'
 LETTERSDIGITS = DIGITS + string.ascii_letters
-KEYWORDS = ['def', 'manip', 'and', 'or', 'not', 'if', 'elif', 'else']
+KEYWORDS = ['def', 'manip', 'and', 'or', 'not', 'if', 'elif', 'else', 'in', 'to', 'step', 'while', 'for', 'loop']
 TT_NUM = 'NUM'
 TT_FLOAT = 'FLOAT'
 TT_PLUS = 'PLUS'
@@ -57,6 +57,8 @@ class Error:
             self.error_name = f"Cannot operate {details[0]} with {details[1]}"
         if self.error_code == 305:
             self.error_name = f"Cannot manipulate preset symbol"
+        if self.error_code == 306:
+            self.error_name = f"Cannot use node for loop"
     def as_string(self):
         if self.error_code > 300:
             result = self.generate_traceback()
@@ -375,6 +377,33 @@ class UnaryOpNode:
         
     def __repr__(self):
         return f'({self.op_tok}, {self.node})'
+    
+class ForNode:
+	def __init__(self, var_name_tok, start_value_node, end_value_node, step_value_node, body_node):
+		self.var_name_tok = var_name_tok
+		self.start_value_node = start_value_node
+		self.end_value_node = end_value_node
+		self.step_value_node = step_value_node
+		self.body_node = body_node
+
+		self.pos_start = self.var_name_tok.pos_start
+		self.pos_end = self.body_node.pos_end
+
+class WhileNode:
+	def __init__(self, condition_node, body_node):
+		self.condition_node = condition_node
+		self.body_node = body_node
+
+		self.pos_start = self.condition_node.pos_start
+		self.pos_end = self.body_node.pos_end
+
+class LoopNode:
+	def __init__(self, amount, body_node):
+		self.amount = amount
+		self.body_node = body_node
+
+		self.pos_start = self.amount.pos_start
+		self.pos_end = self.body_node.pos_end
 
 class ParseResult:
     def __init__(self):
@@ -450,14 +479,219 @@ class Parser:
         return res.failure(Error(tok.pos_start, tok.pos_end, 201, "Expression or Number"))
         
     def parse(self):
-        res = self.ifexpr()
+        res = self.atom()
         if not res.error and self.current_tok.type != TT_EOF:
             if isinstance(res.node, IfNode):
                 return res.failure(Error(self.current_tok.pos_start, self.current_tok.pos_end, 203, "If"))
             if isinstance(res.node, VarAssignNode):
                 return res.failure(Error(self.current_tok.pos_start, self.current_tok.pos_end, 203, "Def/Manip"))
+            if isinstance(res.node, ForNode):
+                return res.failure(Error(self.current_tok.pos_start, self.current_tok.pos_end, 203, "For"))
+            if isinstance(res.node, WhileNode):
+                return res.failure(Error(self.current_tok.pos_start, self.current_tok.pos_end, 203, "While"))
             return res.failure(Error(self.current_tok.pos_start, self.current_tok.pos_end, 201, "Operation"))
         return res
+    
+    def atom(self):
+        res = ParseResult()
+        if self.current_tok.matches(TT_KEYWORD, 'if'):
+            ifexpr = res.register(self.ifexpr())
+            if res.error: return res
+            return res.success(ifexpr)
+        elif self.current_tok.matches(TT_KEYWORD, 'def') or self.current_tok.matches(TT_KEYWORD, 'manip'):
+            varexpr = res.register(self.varexpr())
+            if res.error: return res
+            return res.success(varexpr)
+        elif self.current_tok.matches(TT_KEYWORD, 'for'):
+            forexpr = res.register(self.forexpr())
+            if res.error: return res
+            return res.success(forexpr)
+        elif self.current_tok.matches(TT_KEYWORD, 'while'):
+            whileexpr = res.register(self.whileexpr())
+            if res.error: return res
+            return res.success(whileexpr)
+        elif self.current_tok.matches(TT_KEYWORD, 'loop'):
+            loopexpr = res.register(self.loopexpr())
+            if res.error: return res
+            return res.success(loopexpr)
+        else:
+            expr = res.register(self.expr())
+            if res.error: return res
+            return res.success(expr)
+        
+    def forexpr(self):
+        res = ParseResult()
+        if self.current_tok.matches(TT_KEYWORD, 'for'):
+            res.register_advancement()
+            self.advance()
+            
+            if self.current_tok.type != TT_COLON:
+                return res.failure(Error(self.current_tok.pos_start, self.current_tok.pos_end, 201, '":"'))
+            
+            res.register_advancement()
+            self.advance()
+            
+            if self.current_tok.type != TT_LPAREN:
+                return res.failure(Error(self.current_tok.pos_start, self.current_tok.pos_end, 201, '"("'))
+            
+            res.register_advancement()
+            self.advance()
+            parenpos = self.current_tok.pos_start.copy()
+            if self.current_tok.type != TT_IDENTIFIER:
+                return res.failure(Error(self.current_tok.pos_start, self.current_tok.pos_end, 201, 'Identifier'))
+            
+            var_name = self.current_tok
+            
+            res.register_advancement()
+            self.advance()
+            
+            if not self.current_tok.matches(TT_KEYWORD, 'in'):
+                return res.failure(Error(self.current_tok.pos_start, self.current_tok.pos_end, 201, 'In'))
+            
+            res.register_advancement()
+            self.advance()
+            
+            start = res.register(self.expr())
+            if res.error:
+                return res
+            if not self.current_tok.matches(TT_KEYWORD, 'to'):
+                return res.failure(Error(self.current_tok.pos_start, self.current_tok.pos_end, 201, 'To'))
+            
+            res.register_advancement()
+            self.advance()
+            end = res.register(self.expr())
+            if res.error:
+                return res
+            
+            if self.current_tok.matches(TT_KEYWORD, 'step'):
+                res.register_advancement()
+                self.advance()
+
+                step_value = res.register(self.expr())
+                if res.error: return res
+            else:
+                step_value = None
+            
+            if self.current_tok.type != TT_LBRACE:
+                return res.failure(Error(self.current_tok.pos_start, self.current_tok.pos_end, 201, '"{"'))
+            
+            res.register_advancement()
+            self.advance()
+            
+            bracepos = self.current_tok.pos_start.copy()
+            expr = res.register(self.atom())
+            if res.error:
+                return res
+            
+            if self.current_tok.type != TT_RBRACE:
+                return res.failure(Error(bracepos, self.current_tok.pos_end, 202, 'Braces'))
+            
+            res.register_advancement()
+            self.advance()
+            
+            if self.current_tok.type != TT_RPAREN:
+                return res.failure(Error(parenpos, self.current_tok.pos_end, 202, 'Parenthesis'))
+            
+            res.register_advancement()
+            self.advance()
+            
+            return res.success(ForNode(var_name, start, end, step_value, expr))
+    
+    def whileexpr(self):
+        res = ParseResult()
+        if self.current_tok.matches(TT_KEYWORD, 'while'):
+            res.register_advancement()
+            self.advance()
+            
+            if self.current_tok.type != TT_COLON:
+                return res.failure(Error(self.current_tok.pos_start, self.current_tok.pos_end, 201, '":"'))
+            
+            res.register_advancement()
+            self.advance()
+            
+            if self.current_tok.type != TT_LPAREN:
+                return res.failure(Error(self.current_tok.pos_start, self.current_tok.pos_end, 201, '"("'))
+            
+            res.register_advancement()
+            self.advance()
+            parenpos = self.current_tok.pos_start.copy()
+            
+            condition = res.register(self.expr())
+            if res.error:
+                return res
+            
+            if self.current_tok.type != TT_LBRACE:
+                return res.failure(Error(self.current_tok.pos_start, self.current_tok.pos_end, 201, '"{"'))
+            
+            res.register_advancement()
+            self.advance()
+            
+            bracepos = self.current_tok.pos_start.copy()
+            expr = res.register(self.atom())
+            if res.error:
+                return res
+            
+            if self.current_tok.type != TT_RBRACE:
+                return res.failure(Error(bracepos, self.current_tok.pos_end, 202, 'Braces'))
+            
+            res.register_advancement()
+            self.advance()
+            
+            if self.current_tok.type != TT_RPAREN:
+                return res.failure(Error(parenpos, self.current_tok.pos_end, 202, 'Parenthesis'))
+            
+            res.register_advancement()
+            self.advance()
+            
+            return res.success(WhileNode(condition, expr))
+        
+    def loopexpr(self):
+        res = ParseResult()
+        if self.current_tok.matches(TT_KEYWORD, 'loop'):
+            res.register_advancement()
+            self.advance()
+            
+            if self.current_tok.type != TT_COLON:
+                return res.failure(Error(self.current_tok.pos_start, self.current_tok.pos_end, 201, '":"'))
+            
+            res.register_advancement()
+            self.advance()
+            
+            if self.current_tok.type != TT_LPAREN:
+                return res.failure(Error(self.current_tok.pos_start, self.current_tok.pos_end, 201, '"("'))
+            
+            res.register_advancement()
+            self.advance()
+            parenpos = self.current_tok.pos_start.copy()
+            
+            amount = res.register(self.expr())
+            if res.error:
+                return res
+            
+            if self.current_tok.type != TT_LBRACE:
+                return res.failure(Error(self.current_tok.pos_start, self.current_tok.pos_end, 201, '"{"'))
+            
+            res.register_advancement()
+            self.advance()
+            
+            bracepos = self.current_tok.pos_start.copy()
+            expr = res.register(self.atom())
+            if res.error:
+                return res
+            
+            if self.current_tok.type != TT_RBRACE:
+                return res.failure(Error(bracepos, self.current_tok.pos_end, 202, 'Braces'))
+            
+            res.register_advancement()
+            self.advance()
+            
+            if self.current_tok.type != TT_RPAREN:
+                return res.failure(Error(parenpos, self.current_tok.pos_end, 202, 'Parenthesis'))
+            
+            res.register_advancement()
+            self.advance()
+            
+            return res.success(LoopNode(amount, expr))
     
     def power(self):
         return self.bin_op(self.factor, [TT_POWER])
@@ -501,7 +735,7 @@ class Parser:
                 return res
             
             if self.current_tok.type != TT_RBRACE:
-                return res.failure(Error(bracepos, self.current_tok.pos_end, 202, 'Brace'))
+                return res.failure(Error(bracepos, self.current_tok.pos_end, 202, 'Braces'))
             
             res.register_advancement()
             self.advance()
@@ -581,17 +815,13 @@ class Parser:
                     return res
                 
                 if self.current_tok.type != TT_RBRACE:
-                    return res.failure(Error(bracepos, self.current_tok.pos_end, 202, 'Brace'))
+                    return res.failure(Error(bracepos, self.current_tok.pos_end, 202, 'Braces'))
                 
                 res.register_advancement()
                 self.advance()
                 
                 elsecase = expr
             return res.success(IfNode(cases, elsecase))
-        left = res.register(self.varexpr())
-        if res.error:
-            return res
-        return res.success(left)
     
     def varexpr(self):
         res = ParseResult()
@@ -637,10 +867,6 @@ class Parser:
             self.advance()
             
             return res.success(VarAssignNode(var_name, expr, var_type))
-        left = res.register(self.expr())
-        if res.error:
-            return res
-        return res.success(left)
     
     def expr(self):
         res = ParseResult()
@@ -1094,6 +1320,66 @@ class Interpreter:
     
     def visit_NoneTypeNode(self, node, context):
         return RTResult().success(NoneType().set_context(context).set_pos(node.pos_start, node.pos_end))
+    
+    def visit_LoopNode(self, node, context):
+        res = RTResult()
+        if not isinstance(node.amount, NumberNode) or node.amount.tok.value < 1 or isinstance(node.amount.tok.value, float):
+            return res.failure(Error(node.amount.pos_start, node.amount.pos_end, 306, node.amount, context))
+        for i in range(0, node.amount.tok.value):
+            res.register(self.visit(node.body_node, context))
+            
+        return res.success(None)
+    
+    def visit_ForNode(self, node, context):
+        res = RTResult()
+
+        start_value = res.register(self.visit(node.start_value_node, context))
+        if not isinstance(node.start_value_node, NumberNode) or node.start_value_node.tok.value < 1 or isinstance(node.start_value_node.tok.value, float):
+            return res.failure(Error(node.start_value_node.pos_start, node.start_value_node.pos_end, 306, node.start_value_node, context))
+        if res.error: return res
+
+        end_value = res.register(self.visit(node.end_value_node, context))
+        if not isinstance(node.end_value_node, NumberNode) or node.end_value_node.tok.value < 1 or isinstance(node.end_value_node.tok.value, float):
+            return res.failure(Error(node.end_value_node.pos_start, node.end_value_node.pos_end, 306, node.end_value_node, context))
+        if res.error: return res
+
+        if node.step_value_node:
+            step_value = res.register(self.visit(node.step_value_node, context))
+            if not isinstance(node.step_value_node, NumberNode) or node.step_value_node.tok.value < 1 or isinstance(node.step_value_node.tok.value, float):
+                return res.failure(Error(node.step_value_node.pos_start, node.step_value_node.pos_end, 306, node.start_value_node, context))
+            if res.error: return res
+        else:
+            step_value = Number(1)
+
+        i = start_value.value
+
+        if step_value.value >= 0:
+            condition = lambda: i < end_value.value
+        else:
+            condition = lambda: i > end_value.value
+            
+        while condition():
+            context.symbol_table.set_(node.var_name_tok.value, Number(i))
+            i += step_value.value
+
+            res.register(self.visit(node.body_node, context))
+            if res.error: return res
+
+        return res.success(None)
+    
+    def visit_WhileNode(self, node, context):
+        res = RTResult()
+
+        while True:
+            condition = res.register(self.visit(node.condition_node, context))
+            if res.error: return res
+
+            if condition.value == 0: break
+
+            res.register(self.visit(node.body_node, context))
+            if res.error: return res
+
+        return res.success(None)
         
     def visit_BinOpNode(self, node, context):
         res = RTResult()
@@ -1158,7 +1444,8 @@ class Interpreter:
 
         for condition, expr in node.cases:
             condition_value = res.register(self.visit(condition, context))
-            if res.error: return res
+            if res.error:
+                return res
 
             if condition_value.value != 0:
                 expr_value = res.register(self.visit(expr, context))

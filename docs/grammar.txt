@@ -1,10 +1,15 @@
+atom : if-expr
+     : for-expr
+     : while-expr
+     : var-expr
+     : loop-expr
+     : expr
+
 if-expr : KEYWORD:if COLON LPAREN expr LBRACE expr RBRACE RPAREN
           (KEYWORD:elif COLON LPAREN expr LBRACE expr RBRACE RPAREN)*
           (KEYWORD:else LBRACE expr RBRACE)?
-        : var-expr
 
-var-expr : (KEYWORD:def|KEYWORD:manip) LPAREN IDENTIFIER EQ expr RPAREN
-         : expr
+var-expr : (KEYWORD:def|KEYWORD:manip) COLON LPAREN IDENTIFIER EQ expr RPAREN
 
 expr : comp-expr ((KEYWORD:and|KEYWORD:or) comp-expr)*
 
