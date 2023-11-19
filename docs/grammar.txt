@@ -3,6 +3,7 @@ atom : if-expr
      : while-expr
      : var-expr
      : loop-expr
+     : func-def
      : expr
 
 if-expr : KEYWORD:if COLON LPAREN expr LBRACE expr RBRACE RPAREN
@@ -10,6 +11,14 @@ if-expr : KEYWORD:if COLON LPAREN expr LBRACE expr RBRACE RPAREN
           (KEYWORD:else LBRACE expr RBRACE)?
 
 var-expr : (KEYWORD:def|KEYWORD:manip) COLON LPAREN IDENTIFIER EQ expr RPAREN
+
+loop-expr : KEYWORD:loop COLON LPAREN expr LBRACE atom RBRACE RPAREN
+
+while-expr : KEYWORD:while COLON LPAREN expr LBRACE atom RBRACE RPAREN
+
+for-expr : KEYWORD:for COLON LPAREN IDENTIFIER KEYWORD:in expr KEYWORD:to expr (KEYWORD:step expr)? LBRACE atom RBRACE RPAREN
+
+func-def : KEYWORD:func COLON LPAREN IDENTIFIER? LPAREN (IDENTIFIER (COMMA IDENTIFIER)*)? RPAREN LBRACE expr RBRACE RPAREN
 
 expr : comp-expr ((KEYWORD:and|KEYWORD:or) comp-expr)*
 
@@ -20,8 +29,10 @@ arith-expr : term ((PLUS|MINUS) term)*
 
 term : power ((MUL|DIV) power)*
 
-power : factor (POWER factor)*
+power : call (POWER call)*
 
-factor : NUM|IDENTIFIER|KEYWORD:True|KEYWORD:False
+call : 
+
+factor : NUM|IDENTIFIER
        : (PLUS|MINUS) factor
        : LPAREN expr RPAREN
