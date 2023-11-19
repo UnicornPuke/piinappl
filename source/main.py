@@ -28,6 +28,7 @@ TT_LTE = 'LTE'
 TT_EOF = 'EOF'
 TT_COLON = "COLON"
 TT_COMMA = "COMMA"
+TT_STRING = "STRING"
 
 class Error:
     def __init__(self, pos_start, pos_end, error_code, details, context=None):
@@ -42,6 +43,8 @@ class Error:
             self.error_name = "Invalid number"
         if self.error_code == 103:
             self.error_name = "Expected Character"
+        if self.error_code == 104:
+            self.error_name = "Unclosed Grouping"
         if self.error_code == 201:
             self.error_name = "Expected Character"
         if self.error_code == 202:
@@ -205,6 +208,16 @@ class Lexer:
             elif self.current_char == ",":
                 tokens.append(Token(TT_COMMA,pos_start=self.pos))
                 self.advance()
+            elif self.current_char in ('"'):
+                tok, error = self.make_string('"')
+                if error:
+                    return [], error
+                tokens.append(tok)
+            elif self.current_char in ("'"):
+                tok, error = self.make_string("'")
+                if error:
+                    return [], error
+                tokens.append(tok)
             elif self.current_char == "=":
                 tokens.append(self.make_equals())
             elif self.current_char == "<":
@@ -232,6 +245,18 @@ class Lexer:
         tokens.append(Token(TT_EOF, pos_start=self.pos))
         return tokens, None
     
+    def make_string(self, type_):
+        string = ''
+        pos_start = self.pos.copy()
+        self.advance()
+        while self.current_char != type_ and self.current_char != None:
+            string += self.current_char
+            self.advance()
+            if self.pos.idx == len(self.text):
+                return None, Error(pos_start, self.pos, 104, 'String')
+        self.advance()
+        return Token(TT_STRING, string, pos_start, self.pos), None 
+                
     def make_number(self):
         num_str = ''
         dot_count = 0
@@ -334,6 +359,16 @@ class VarAssignNode:
         self.pos_end = self.value_node.pos_end
         
 class NumberNode:
+    def __init__(self, tok):
+        self.tok = tok
+        
+        self.pos_start = self.tok.pos_start
+        self.pos_end = self.tok.pos_end
+        
+    def __repr__(self):
+        return f'{self.tok}'
+    
+class StringNode:
     def __init__(self, tok):
         self.tok = tok
         
@@ -500,6 +535,10 @@ class Parser:
             res.register_advancement()
             self.advance()
             return res.success(NumberNode(tok))
+        elif tok.type == TT_STRING:
+            res.register_advancement()
+            self.advance()
+            return res.success(StringNode(tok))
         elif tok.type == TT_IDENTIFIER:
             res.register_advancement()
             self.advance()
@@ -1267,32 +1306,24 @@ class Boolean:
         return Boolean(number).set_context(self.context), None
     
     def less_than(self, other):
-        if self.value < other.value:
-            number = 1
-        else:
-            number = 0
-        return Boolean(number).set_context(self.context), None
+        return None, Error(other.pos_start, other.pos_end,
+                    304, ["Boolean", other.type], self.context
+                )
     
     def greater_than(self, other):
-        if self.value > other.value:
-            number = 1
-        else:
-            number = 0
-        return Boolean(number).set_context(self.context), None
+        return None, Error(other.pos_start, other.pos_end,
+                    304, ["Boolean", other.type], self.context
+                )
     
     def less_than_equals(self, other):
-        if self.value <= other.value:
-            number = 1
-        else:
-            number = 0
-        return Boolean(number).set_context(self.context), None
+        return None, Error(other.pos_start, other.pos_end,
+                    304, ["Boolean", other.type], self.context
+                )
     
     def greater_than_equals(self, other):
-        if self.value >= other.value:
-            number = 1
-        else:
-            number = 0
-        return Boolean(number).set_context(self.context), None
+        return None, Error(other.pos_start, other.pos_end,
+                    304, ["Boolean", other.type], self.context
+                )
     
     def notted(self):
         if self.value == 0:
@@ -1337,7 +1368,7 @@ class Function:
         return self
     
     def copy(self):
-        copy = Number(self.value)
+        copy = Function(self.name, self.body_node, self.arg_names)
         copy.set_pos(self.pos_start, self.pos_end)
         copy.set_context(self.context)
         return copy
@@ -1448,6 +1479,101 @@ class Function:
     def set_context(self, context=None):
         self.context = context
         return self
+    
+class String:
+    def __init__(self, value):
+        self.set_pos()
+        self.set_context()
+        self.type = "String"
+        self.value = str(value)
+        
+    def set_pos(self, pos_start=None, pos_end=None):
+        self.pos_start = pos_start
+        self.pos_end = pos_end
+        return self
+    
+    def copy(self):
+        copy = String(self.value)
+        copy.set_pos(self.pos_start, self.pos_end)
+        copy.set_context(self.context)
+        return copy
+    
+    def added_to(self, other):
+        if other.type == "String":
+            return String(self.value + other.value).set_context(self.context), None
+        return None, Error(other.pos_start, other.pos_end,
+                    304, ["String", other.type], self.context
+                )
+
+    def subbed_by(self, other):
+        return None, Error(other.pos_start, other.pos_end,
+                    304, ["String", other.type], self.context
+                )
+
+    def multed_by(self, other):
+        return None, Error(other.pos_start, other.pos_end,
+                    304, ["String", other.type], self.context
+                )
+
+    def dived_by(self, other):
+        return None, Error(other.pos_start, other.pos_end,
+                    304, ["String", other.type], self.context
+                )
+        
+    def powed_by(self, other):
+        return None, Error(other.pos_start, other.pos_end,
+                    304, ["String", other.type], self.context
+                )
+        
+    def equals(self, other):
+        if self.value == other.value:
+            number = 1
+        else:
+            number = 0
+        return Boolean(number).set_context(self.context), None
+    
+    def not_equals(self, other):
+        if self.value != other.value:
+            number = 1
+        else:
+            number = 0
+        return Boolean(number).set_context(self.context), None
+    
+    def less_than(self, other):
+        return None, Error(other.pos_start, other.pos_end,
+                        304, ["String", other.type], self.context
+                    )
+    
+    def greater_than(self, other):
+        return None, Error(other.pos_start, other.pos_end,
+                        304, ["String", other.type], self.context
+                    )
+    
+    def less_than_equals(self, other):
+        return None, Error(other.pos_start, other.pos_end,
+                        304, ["String", other.type], self.context
+                    )
+    
+    def greater_than_equals(self, other):
+        return None, Error(other.pos_start, other.pos_end,
+                        304, ["String", other.type], self.context
+                    )
+    
+    def notted(self):
+        return None, Error(self.pos_start, self.pos_end, 304, ["not", "String"], self.context)
+    
+    def anded(self, other):
+        return None, Error(self.pos_start, self.pos_end, 304, ["and", f"String and {other.type}"], self.context)
+    
+    def ored(self,other):
+        return None, Error(self.pos_start, self.pos_end, 304, ["or", f"String and {other.type}"], self.context)
+    
+    def set_context(self, context=None):
+        self.context = context
+        return self
+        
+    def __repr__(self):
+        return str(self.value)
 
 class NoneType:
     def __init__(self):
@@ -1507,32 +1633,24 @@ class NoneType:
         return Boolean(number).set_context(self.context), None
     
     def less_than(self, other):
-        if self.value < other.value:
-            number = 1
-        else:
-            number = 0
-        return Boolean(number).set_context(self.context), None
+        return None, Error(other.pos_start, other.pos_end,
+                        304, ["None", other.type], self.context
+                    )
     
     def greater_than(self, other):
-        if self.value > other.value:
-            number = 1
-        else:
-            number = 0
-        return Boolean(number).set_context(self.context), None
+        return None, Error(other.pos_start, other.pos_end,
+                        304, ["None", other.type], self.context
+                    )
     
     def less_than_equals(self, other):
-        if self.value <= other.value:
-            number = 1
-        else:
-            number = 0
-        return Boolean(number).set_context(self.context), None
+        return None, Error(other.pos_start, other.pos_end,
+                        304, ["None", other.type], self.context
+                    )
     
     def greater_than_equals(self, other):
-        if self.value >= other.value:
-            number = 1
-        else:
-            number = 0
-        return Boolean(number).set_context(self.context), None
+        return None, Error(other.pos_start, other.pos_end,
+                        304, ["None", other.type], self.context
+                    )
     
     def notted(self):
         return None, Error(self.pos_start, self.pos_end, 304, ["not", "None"], self.context)
@@ -1595,6 +1713,8 @@ class Interpreter:
     
     def visit_NumberNode(self, node, context):
         return RTResult().success(Number(node.tok.value).set_context(context).set_pos(node.pos_start, node.pos_end))
+    def visit_StringNode(self, node, context):
+        return RTResult().success(String(node.tok.value).set_context(context).set_pos(node.pos_start, node.pos_end))
     
     def visit_BooleanNode(self, node, context):
         if node.tok.value == "False":
