@@ -302,12 +302,15 @@ class ParseResult:
     def __init__(self):
         self.error = None
         self.node = None
+        self.advance_count = 0
+        
+    def register_advancement(self):
+        self.advance_count += 1
         
     def register(self, res):
-        if isinstance(res, ParseResult):
-            if res.error: self.error = res.error
-            return res.node
-        return res
+        self.advance_count += res.advance_count
+        if res.error: self.error = res.error
+        return res.node
     
     def success(self, node):
         self.node = node
@@ -334,26 +337,31 @@ class Parser:
         tok = self.current_tok
         
         if tok.type in (TT_PLUS, TT_MINUS):
-            res.register(self.advance())
+            res.register_advancement()
+            self.advance()
             factor = res.register(self.factor())
             if res.error:
                 return res
             return res.success(UnaryOpNode(tok, factor))
         
         elif tok.type == TT_LPAREN:
-            res.register(self.advance())
+            res.register_advancement()
+            self.advance()
             pos_startt = self.current_tok.pos_start.copy()
             expr = res.register(self.expr())
             if res.error: return res
             if self.current_tok.type == TT_RPAREN:
-                res.register(self.advance())
+                res.register_advancement()
+                self.advance()
                 return res.success(expr)
             return res.failure(Error(pos_startt, self.current_tok.pos_end, 202, "Parenthesis"))        
         elif tok.type == TT_NUM:
-            res.register(self.advance())
+            res.register_advancement()
+            self.advance()
             return res.success(NumberNode(tok))
         elif tok.type == TT_IDENTIFIER:
-            res.register(self.advance())
+            res.register_advancement()
+            self.advance()
             if tok.value == "False":
                 return res.success(BooleanNode(tok))
             if tok.value == "True":
@@ -361,41 +369,6 @@ class Parser:
             if tok.value == "None":
                 return res.success(NoneTypeNode(tok))
             return res.success(VarAccessNode(tok))
-        elif self.current_tok.matches(TT_KEYWORD, 'def') or self.current_tok.matches(TT_KEYWORD, 'manip'):
-            var_type = self.current_tok.value
-            res.register(self.advance())
-            
-            if self.current_tok.type != TT_COLON:
-                return res.failure(Error(self.current_tok.pos_start, self.current_tok.pos_end, 201, '":"'))
-            
-            res.register(self.advance())
-            
-            if self.current_tok.type != TT_LPAREN:
-                return res.failure(Error(self.current_tok.pos_start, self.current_tok.pos_end, 201, '"("'))
-            
-            res.register(self.advance())
-            parenpos = self.current_tok.pos_start.copy()
-            
-            if self.current_tok.type != TT_IDENTIFIER:
-                return res.failure(Error(self.current_tok.pos_start, self.current_tok.pos_end, 201, 'Identifier'))
-            
-            var_name = self.current_tok
-            res.register(self.advance())
-            
-            if self.current_tok.type != TT_EQ:
-                return res.failure(Error(self.current_tok.pos_start, self.current_tok.pos_end, 201, '"="'))
-            
-            res.register(self.advance())
-            expr = res.register(self.expr())
-            if res.error:
-                return res
-            
-            if self.current_tok.type != TT_RPAREN:
-                return res.failure(Error(parenpos, self.current_tok.pos_end, 202, 'Parenthesis'))
-            
-            res.register(self.advance())
-            
-            return res.success(VarAssignNode(var_name, expr, var_type))
         return res.failure(Error(tok.pos_start, tok.pos_end, 201, "Expression or Number"))
         
     def parse(self):
@@ -411,6 +384,48 @@ class Parser:
         return self.bin_op(self.power, [TT_MUL, TT_DIV])
     
     def expr(self):
+        res = ParseResult()
+        if self.current_tok.matches(TT_KEYWORD, 'def') or self.current_tok.matches(TT_KEYWORD, 'manip'):
+            var_type = self.current_tok.value
+            res.register_advancement()
+            self.advance()
+            
+            if self.current_tok.type != TT_COLON:
+                return res.failure(Error(self.current_tok.pos_start, self.current_tok.pos_end, 201, '":"'))
+            
+            res.register_advancement()
+            self.advance()
+            
+            if self.current_tok.type != TT_LPAREN:
+                return res.failure(Error(self.current_tok.pos_start, self.current_tok.pos_end, 201, '"("'))
+            
+            res.register_advancement()
+            self.advance()
+            parenpos = self.current_tok.pos_start.copy()
+            
+            if self.current_tok.type != TT_IDENTIFIER:
+                return res.failure(Error(self.current_tok.pos_start, self.current_tok.pos_end, 201, 'Identifier'))
+            
+            var_name = self.current_tok
+            res.register_advancement()
+            self.advance()
+            
+            if self.current_tok.type != TT_EQ:
+                return res.failure(Error(self.current_tok.pos_start, self.current_tok.pos_end, 201, '"="'))
+            
+            res.register_advancement()
+            self.advance()
+            expr = res.register(self.expr())
+            if res.error:
+                return res
+            
+            if self.current_tok.type != TT_RPAREN:
+                return res.failure(Error(parenpos, self.current_tok.pos_end, 202, 'Parenthesis'))
+            
+            res.register_advancement()
+            self.advance()
+            
+            return res.success(VarAssignNode(var_name, expr, var_type))
         return self.bin_op(self.term, [TT_PLUS, TT_MINUS])
     
     def bin_op(self, func, ops):
@@ -420,7 +435,8 @@ class Parser:
             return res
         while self.current_tok.type in ops:
             op_tok = self.current_tok
-            res.register(self.advance())
+            res.register_advancement()
+            self.advance()
             right = res.register(func())
             if res.error:
                 return res
@@ -457,28 +473,28 @@ class Number:
         return self
 
     def added_to(self, other):
-        if isinstance(other, Number):
+        if other.type == "Number":
             return Number(self.value + other.value).set_context(self.context), None
         return None, Error(other.pos_start, other.pos_end,
                     304, ["Number", other.type], self.context
                 )
 
     def subbed_by(self, other):
-        if isinstance(other, Number):
+        if other.type == "Number":
             return Number(self.value - other.value).set_context(self.context), None
         return None, Error(other.pos_start, other.pos_end,
                     304, ["Number", other.type], self.context
                 )
 
     def multed_by(self, other):
-        if isinstance(other, Number):
+        if other.type == "Number":
             return Number(self.value * other.value).set_context(self.context), None
         return None, Error(other.pos_start, other.pos_end,
                     304, ["Number", other.type], self.context
                 )
 
     def dived_by(self, other):
-        if isinstance(other, Number):
+        if other.type == "Number":
             if other.value == 0:
                 return None, Error(
                     other.pos_start, other.pos_end,
@@ -491,7 +507,7 @@ class Number:
                 )
         
     def powed_by(self, other):
-        if isinstance(other, Number):
+        if other.type == "Number":
             return Number(self.value ** other.value).set_context(self.context), None
         return None, Error(other.pos_start, other.pos_end,
                     304, ["Number", other.type], self.context
@@ -501,6 +517,12 @@ class Number:
     def set_context(self, context=None):
         self.context = context
         return self
+        
+    def copy(self):
+        copy = Number(self.value)
+        copy.set_pos(self.pos_start, self.pos_end)
+        copy.set_context(self.context)
+        return copy    
         
     def __repr__(self):
         return str(self.value)
@@ -516,6 +538,12 @@ class Boolean:
         self.pos_start = pos_start
         self.pos_end = pos_end
         return self
+    
+    def copy(self):
+        copy = Number(self.value)
+        copy.set_pos(self.pos_start, self.pos_end)
+        copy.set_context(self.context)
+        return copy
     
     def added_to(self, other):
         return None, Error(other.pos_start, other.pos_end,
@@ -554,11 +582,18 @@ class NoneType:
         self.set_pos()
         self.set_context()
         self.type = "None"
+        self.value = None
         
     def set_pos(self, pos_start=None, pos_end=None):
         self.pos_start = pos_start
         self.pos_end = pos_end
         return self
+    
+    def copy(self):
+        copy = Number(self.value)
+        copy.set_pos(self.pos_start, self.pos_end)
+        copy.set_context(self.context)
+        return copy
     
     def added_to(self, other):
         return None, Error(other.pos_start, other.pos_end,
@@ -590,7 +625,7 @@ class NoneType:
         return self
         
     def __repr__(self):
-        return "None"
+        return "Noned"
         
     
 class Interpreter:
@@ -610,6 +645,7 @@ class Interpreter:
         if not value:
             return res.failure(Error(node.pos_start, node.pos_end, 302, var_name, context))
         
+        value = value.copy().set_pos(node.pos_start, node.pos_end)
         return res.success(value)
     
     def visit_VarAssignNode(self, node, context):
@@ -652,6 +688,7 @@ class Interpreter:
         left = res.register(self.visit(node.left_node, context))
         if res.error: return res
         right = res.register(self.visit(node.right_node, context))
+        
         if res.error: return res
         
         if node.op_tok.type == TT_PLUS:
