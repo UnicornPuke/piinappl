@@ -4,7 +4,7 @@ import string
 
 DIGITS = '0123456789'
 LETTERSDIGITS = DIGITS + string.ascii_letters
-KEYWORDS = ['def', 'manip']
+KEYWORDS = ['def', 'manip', 'and', 'or', 'not', 'if', 'elif', 'else']
 TT_NUM = 'NUM'
 TT_FLOAT = 'FLOAT'
 TT_PLUS = 'PLUS'
@@ -19,6 +19,12 @@ TT_POWER = 'POWER'
 TT_KEYWORD = 'KEYWORD'
 TT_IDENTIFIER = 'IDENTIFIER'
 TT_EQ = 'EQ'
+TT_EE = 'EE'
+TT_NE = 'NE'
+TT_GT = 'GT'
+TT_LT = 'LT'
+TT_GTE = 'GTE'
+TT_LTE = 'LTE'
 TT_EOF = 'EOF'
 TT_COLON = "COLON"
 
@@ -31,10 +37,16 @@ class Error:
         self.context = context
         if self.error_code == 101:
             self.error_name = "Illegal Character"
+        if self.error_code == 102:
+            self.error_name = "Invalid number"
+        if self.error_code == 103:
+            self.error_name = "Expected Character"
         if self.error_code == 201:
             self.error_name = "Expected Character"
         if self.error_code == 202:
             self.error_name = "Unclosed Grouping"
+        if self.error_code == 203:
+            self.error_name = "Cannot continue after expression until new line"
         if self.error_code == 301:
             self.error_name = "Division by zero"
         if self.error_code == 302:
@@ -184,11 +196,22 @@ class Lexer:
                 tokens.append(Token(TT_POWER,pos_start=self.pos))
                 self.advance()
             elif self.current_char == "=":
-                tokens.append(Token(TT_EQ,pos_start=self.pos))
-                self.advance()
+                tokens.append(self.make_equals())
+            elif self.current_char == "<":
+                tokens.append(self.make_less_than())
+            elif self.current_char == ">":
+                tokens.append(self.make_greater_than())
+            elif self.current_char == "!":
+                tok, error = self.make_not_equals() 
+                if error:
+                    return [], error
+                tokens.append(tok)
             elif self.current_char in DIGITS + ".":
-                tokens.append(self.make_number())
-            elif self.current_char in string.ascii_letters:
+                numby, pos = self.make_number()
+                if numby == "wazup":
+                    return [], Error(pos, self.pos, 102, '"."')
+                tokens.append(numby)
+            elif self.current_char in string.ascii_letters + "_":
                 tokens.append(self.make_words())
             else:
                 pos_start = self.pos.copy()
@@ -213,10 +236,13 @@ class Lexer:
                 num_str += self.current_char
             self.advance()
             
+        if num_str == '.':
+            return "wazup", pos_start
+            
         if dot_count == 1:
-            return Token(TT_NUM, float(num_str), pos_start, self.pos)
+            return Token(TT_NUM, float(num_str), pos_start, self.pos), None
         elif dot_count == 0:
-            return Token(TT_NUM, int(num_str), pos_start, self.pos)
+            return Token(TT_NUM, int(num_str), pos_start, self.pos), None
         
     def make_words(self):
         string = ''
@@ -228,6 +254,50 @@ class Lexer:
             return Token(TT_KEYWORD, string, pos_start, self.pos)
         else:
             return Token(TT_IDENTIFIER, string, pos_start, self.pos)
+        
+    def make_not_equals(self):
+        pos_start = self.pos.copy()
+        self.advance()
+        
+        if self.current_char == '=':
+            self.advance()
+            return Token(TT_NE, pos_start=pos_start, pos_end=self.pos), None
+        
+        self.advance()
+        return None, Error(pos_start, self.pos, 103, '"="')
+    
+    def make_equals(self):
+        tok_type = TT_EQ
+        pos_start = self.pos.copy()
+        self.advance()
+        
+        if self.current_char == '=':
+            self.advance()
+            tok_type = TT_EE
+            
+        return Token(tok_type, pos_start=pos_start, pos_end=self.pos)
+    
+    def make_less_than(self):
+        tok_type = TT_LT
+        pos_start = self.pos.copy()
+        self.advance()
+        
+        if self.current_char == '=':
+            self.advance()
+            tok_type = TT_LTE
+            
+        return Token(tok_type, pos_start=pos_start, pos_end=self.pos)
+    
+    def make_greater_than(self):
+        tok_type = TT_GT
+        pos_start = self.pos.copy()
+        self.advance()
+        
+        if self.current_char == '=':
+            self.advance()
+            tok_type = TT_GTE
+            
+        return Token(tok_type, pos_start=pos_start, pos_end=self.pos)
 
 class VarAccessNode:
     def __init__(self, var_name_tok):
@@ -235,6 +305,14 @@ class VarAccessNode:
         
         self.pos_start = self.var_name_tok.pos_start
         self.pos_end = self.var_name_tok.pos_end
+        
+class IfNode:
+    def __init__(self, cases, elsecase):
+        self.cases = cases
+        self.elsecase = elsecase
+        
+        self.pos_start = self.cases[0][0].pos_start
+        self.pos_end = (self.elsecase or self.cases[len(self.cases) - 1][0]).pos_end
         
 class VarAssignNode:
     def __init__(self, var_name_tok, value_node, var_type):
@@ -372,8 +450,12 @@ class Parser:
         return res.failure(Error(tok.pos_start, tok.pos_end, 201, "Expression or Number"))
         
     def parse(self):
-        res = self.expr()
+        res = self.ifexpr()
         if not res.error and self.current_tok.type != TT_EOF:
+            if isinstance(res.node, IfNode):
+                return res.failure(Error(self.current_tok.pos_start, self.current_tok.pos_end, 203, "If"))
+            if isinstance(res.node, VarAssignNode):
+                return res.failure(Error(self.current_tok.pos_start, self.current_tok.pos_end, 203, "Def/Manip"))
             return res.failure(Error(self.current_tok.pos_start, self.current_tok.pos_end, 201, "Operation"))
         return res
     
@@ -383,7 +465,135 @@ class Parser:
     def term(self):
         return self.bin_op(self.power, [TT_MUL, TT_DIV])
     
-    def expr(self):
+    def ifexpr(self):
+        res = ParseResult()
+        if self.current_tok.matches(TT_KEYWORD, 'if'):
+            cases = []
+            elsecase = None
+            res.register_advancement()
+            self.advance()
+            
+            if self.current_tok.type != TT_COLON:
+                return res.failure(Error(self.current_tok.pos_start, self.current_tok.pos_end, 201, '":"'))
+            
+            res.register_advancement()
+            self.advance()
+            
+            if self.current_tok.type != TT_LPAREN:
+                return res.failure(Error(self.current_tok.pos_start, self.current_tok.pos_end, 201, '"("'))
+            
+            res.register_advancement()
+            self.advance()
+            parenpos = self.current_tok.pos_start.copy()
+            condition = res.register(self.expr())
+            if res.error:
+                return res
+            
+            if self.current_tok.type != TT_LBRACE:
+                return res.failure(Error(self.current_tok.pos_start, self.current_tok.pos_end, 201, '"{"'))
+            
+            res.register_advancement()
+            self.advance()
+            
+            bracepos = self.current_tok.pos_start.copy()
+            expr = res.register(self.expr())
+            if res.error:
+                return res
+            
+            if self.current_tok.type != TT_RBRACE:
+                return res.failure(Error(bracepos, self.current_tok.pos_end, 202, 'Brace'))
+            
+            res.register_advancement()
+            self.advance()
+            
+            if self.current_tok.type != TT_RPAREN:
+                return res.failure(Error(parenpos, self.current_tok.pos_end, 202, 'Parenthesis'))
+            
+            res.register_advancement()
+            self.advance()
+            
+            cases.append((condition, expr))
+            
+            while self.current_tok.matches(TT_KEYWORD, 'elif'):
+                res.register_advancement()
+                self.advance()
+                
+                if self.current_tok.type != TT_COLON:
+                    return res.failure(Error(self.current_tok.pos_start, self.current_tok.pos_end, 201, '":"'))
+                
+                res.register_advancement()
+                self.advance()
+                
+                if self.current_tok.type != TT_LPAREN:
+                    return res.failure(Error(self.current_tok.pos_start, self.current_tok.pos_end, 201, '"("'))
+                
+                res.register_advancement()
+                self.advance()
+                parenpos = self.current_tok.pos_start.copy()
+                condition = res.register(self.expr())
+                if res.error:
+                    return res
+                
+                if self.current_tok.type != TT_LBRACE:
+                    return res.failure(Error(self.current_tok.pos_start, self.current_tok.pos_end, 201, '"{"'))
+                
+                res.register_advancement()
+                self.advance()
+                
+                bracepos = self.current_tok.pos_start.copy()
+                expr = res.register(self.expr())
+                if res.error:
+                    return res
+                
+                if self.current_tok.type != TT_RBRACE:
+                    return res.failure(Error(bracepos, self.current_tok.pos_end, 202, 'Brace'))
+                
+                res.register_advancement()
+                self.advance()
+                
+                if self.current_tok.type != TT_RPAREN:
+                    return res.failure(Error(parenpos, self.current_tok.pos_end, 202, 'Parenthesis'))
+                
+                res.register_advancement()
+                self.advance()
+                
+                cases.append((condition, expr))
+                
+            if self.current_tok.matches(TT_KEYWORD, 'else'):
+                res.register_advancement()
+                self.advance()
+                
+                if self.current_tok.type != TT_COLON:
+                    return res.failure(Error(self.current_tok.pos_start, self.current_tok.pos_end, 201, '":"'))
+                
+                res.register_advancement()
+                self.advance()
+                
+                if self.current_tok.type != TT_LBRACE:
+                    return res.failure(Error(self.current_tok.pos_start, self.current_tok.pos_end, 201, '"{"'))
+                
+                res.register_advancement()
+                self.advance()
+                
+                bracepos = self.current_tok.pos_start.copy()
+                expr = res.register(self.expr())
+                if res.error:
+                    return res
+                
+                if self.current_tok.type != TT_RBRACE:
+                    return res.failure(Error(bracepos, self.current_tok.pos_end, 202, 'Brace'))
+                
+                res.register_advancement()
+                self.advance()
+                
+                elsecase = expr
+            return res.success(IfNode(cases, elsecase))
+        left = res.register(self.varexpr())
+        if res.error:
+            return res
+        return res.success(left)
+    
+    def varexpr(self):
         res = ParseResult()
         if self.current_tok.matches(TT_KEYWORD, 'def') or self.current_tok.matches(TT_KEYWORD, 'manip'):
             var_type = self.current_tok.value
@@ -410,6 +620,7 @@ class Parser:
             res.register_advancement()
             self.advance()
             
+            
             if self.current_tok.type != TT_EQ:
                 return res.failure(Error(self.current_tok.pos_start, self.current_tok.pos_end, 201, '"="'))
             
@@ -426,6 +637,43 @@ class Parser:
             self.advance()
             
             return res.success(VarAssignNode(var_name, expr, var_type))
+        left = res.register(self.expr())
+        if res.error:
+            return res
+        return res.success(left)
+    
+    def expr(self):
+        res = ParseResult()
+        left = res.register(self.compexpr())
+        if res.error:
+            return res
+        while self.current_tok.matches(TT_KEYWORD, 'and') or self.current_tok.matches(TT_KEYWORD, 'or'):
+            op_tok = self.current_tok
+            res.register_advancement()
+            self.advance()
+            right = res.register(self.compexpr())
+            if res.error:
+                return res
+            left = BinOpNode(left, op_tok, right)
+        return res.success(left)
+        
+    def compexpr(self):
+        res = ParseResult()
+        if self.current_tok.matches(TT_KEYWORD, 'not'):
+            op_tok = self.current_tok
+            res.register_advancement()
+            self.advance()
+            compexpr = res.register(self.compexpr())
+            if res.error: return res
+            return res.success(UnaryOpNode(op_tok, compexpr))
+        node = res.register(self.bin_op(self.arithexpr, [TT_EE, TT_LT, TT_GT, TT_LTE, TT_GTE]))
+        
+        if res.error:
+            return res.failure(Error(self.current_tok.pos_start, self.current_tok.pos_end, 201, 'Expression or Number'))
+        
+        return res.success(node)
+
+    def arithexpr(self):
         return self.bin_op(self.term, [TT_PLUS, TT_MINUS])
     
     def bin_op(self, func, ops):
@@ -512,7 +760,57 @@ class Number:
         return None, Error(other.pos_start, other.pos_end,
                     304, ["Number", other.type], self.context
                 )
+        
+    def equals(self, other):
+        if self.value == other.value:
+            number = 1
+        else:
+            number = 0
+        return Boolean(number).set_context(self.context), None
+    
+    def not_equals(self, other):
+        if self.value != other.value:
+            number = 1
+        else:
+            number = 0
+        return Boolean(number).set_context(self.context), None
+    
+    def less_than(self, other):
+        if self.value < other.value:
+            number = 1
+        else:
+            number = 0
+        return Boolean(number).set_context(self.context), None
+    
+    def greater_than(self, other):
+        if self.value > other.value:
+            number = 1
+        else:
+            number = 0
+        return Boolean(number).set_context(self.context), None
+    
+    def less_than_equals(self, other):
+        if self.value <= other.value:
+            number = 1
+        else:
+            number = 0
+        return Boolean(number).set_context(self.context), None
+    
+    def greater_than_equals(self, other):
+        if self.value >= other.value:
+            number = 1
+        else:
+            number = 0
+        return Boolean(number).set_context(self.context), None
 
+    def notted(self):
+        return None, Error(self.pos_start, self.pos_end, 304, ["not", "Number"], self.context)
+    
+    def anded(self, other):
+        return None, Error(self.pos_start, self.pos_end, 304, ["and", f"None and {other.type}"], self.context)
+    
+    def ored(self,other):
+        return None, Error(self.pos_start, self.pos_end, 304, ["or", f"None and {other.type}"], self.context)
         
     def set_context(self, context=None):
         self.context = context
@@ -570,6 +868,69 @@ class Boolean:
                     304, ["Boolean", other.type], self.context
                 )
         
+    def equals(self, other):
+        if self.value == other.value:
+            number = 1
+        else:
+            number = 0
+        return Boolean(number).set_context(self.context), None
+    
+    def not_equals(self, other):
+        if self.value != other.value:
+            number = 1
+        else:
+            number = 0
+        return Boolean(number).set_context(self.context), None
+    
+    def less_than(self, other):
+        if self.value < other.value:
+            number = 1
+        else:
+            number = 0
+        return Boolean(number).set_context(self.context), None
+    
+    def greater_than(self, other):
+        if self.value > other.value:
+            number = 1
+        else:
+            number = 0
+        return Boolean(number).set_context(self.context), None
+    
+    def less_than_equals(self, other):
+        if self.value <= other.value:
+            number = 1
+        else:
+            number = 0
+        return Boolean(number).set_context(self.context), None
+    
+    def greater_than_equals(self, other):
+        if self.value >= other.value:
+            number = 1
+        else:
+            number = 0
+        return Boolean(number).set_context(self.context), None
+    
+    def notted(self):
+        if self.value == 0:
+            self.value = 1
+        else:
+            self.value = 0
+        return Boolean(self.value).set_context(self.context), None
+    
+    def ored(self, other):
+        if self.value == 1 or other.value == 1:
+            number = 1
+        else:
+            number = 0
+        return Boolean(number).set_context(self.context), None
+    
+    def anded (self, other):
+        if self.value == 1 and other.value == 1:
+            number = 1
+        else:
+            number = 0
+        return Boolean(number).set_context(self.context), None
+        
     def set_context(self, context=None):
         self.context = context
         return self
@@ -582,7 +943,7 @@ class NoneType:
         self.set_pos()
         self.set_context()
         self.type = "None"
-        self.value = None
+        self.value = 0
         
     def set_pos(self, pos_start=None, pos_end=None):
         self.pos_start = pos_start
@@ -619,6 +980,57 @@ class NoneType:
         return None, Error(other.pos_start, other.pos_end,
                     304, ["None", other.type], self.context
                 )
+        
+    def equals(self, other):
+        if self.value == other.value:
+            number = 1
+        else:
+            number = 0
+        return Boolean(number).set_context(self.context), None
+    
+    def not_equals(self, other):
+        if self.value != other.value:
+            number = 1
+        else:
+            number = 0
+        return Boolean(number).set_context(self.context), None
+    
+    def less_than(self, other):
+        if self.value < other.value:
+            number = 1
+        else:
+            number = 0
+        return Boolean(number).set_context(self.context), None
+    
+    def greater_than(self, other):
+        if self.value > other.value:
+            number = 1
+        else:
+            number = 0
+        return Boolean(number).set_context(self.context), None
+    
+    def less_than_equals(self, other):
+        if self.value <= other.value:
+            number = 1
+        else:
+            number = 0
+        return Boolean(number).set_context(self.context), None
+    
+    def greater_than_equals(self, other):
+        if self.value >= other.value:
+            number = 1
+        else:
+            number = 0
+        return Boolean(number).set_context(self.context), None
+    
+    def notted(self):
+        return None, Error(self.pos_start, self.pos_end, 304, ["not", "None"], self.context)
+    
+    def anded(self, other):
+        return None, Error(self.pos_start, self.pos_end, 304, ["and", f"None and {other.type}"], self.context)
+    
+    def ored(self,other):
+        return None, Error(self.pos_start, self.pos_end, 304, ["or", f"None and {other.type}"], self.context)
     
     def set_context(self, context=None):
         self.context = context
@@ -701,6 +1113,22 @@ class Interpreter:
             result,error= left.multed_by(right)
         elif node.op_tok.type == TT_POWER:
             result,error= left.powed_by(right)
+        elif node.op_tok.type == TT_EE:
+            result,error = left.equals(right)
+        elif node.op_tok.type == TT_NE:
+            result,error = left.not_equals(right)
+        elif node.op_tok.type == TT_GT:
+            result,error = left.greater_than(right)
+        elif node.op_tok.type == TT_LT:
+            result,error= left.less_than(right)
+        elif node.op_tok.type == TT_GTE:
+            result,error= left.greater_than_equals(right)
+        elif node.op_tok.type == TT_LTE:
+            result,error= left.less_than_equals(right)
+        elif node.op_tok.matches(TT_KEYWORD, 'or'):
+            result, error= left.ored(right)
+        elif node.op_tok.matches(TT_KEYWORD, 'and'):
+            result, error= left.anded(right)
         
         if error:
             return res.failure(error)
@@ -717,11 +1145,32 @@ class Interpreter:
         
         if node.op_tok.type == TT_MINUS:
             number, error = number.multed_by(Number(-1))
+        if node.op_tok.matches(TT_KEYWORD, 'not'):
+            number, error = number.notted()
             
         if error:
             return res.failure(error)
         else:    
             return res.success(number.set_context(context).set_pos(node.pos_start, node.pos_end))
+        
+    def visit_IfNode(self, node, context):
+        res = RTResult()
+
+        for condition, expr in node.cases:
+            condition_value = res.register(self.visit(condition, context))
+            if res.error: return res
+
+            if condition_value.value != 0:
+                expr_value = res.register(self.visit(expr, context))
+                if res.error: return res
+                return res.success(expr_value)
+
+        if node.elsecase:
+            else_value = res.register(self.visit(node.elsecase, context))
+            if res.error: return res
+            return res.success(else_value)
+
+        return res.success(None)
         
 global_symbol_table = SymbolTable()
 global_symbol_table.set_("True", Boolean(1))

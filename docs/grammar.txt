@@ -1,4 +1,17 @@
-expr : term ((PLUS|MINUS) term)*
+if-expr : KEYWORD:if COLON LPAREN expr LBRACE expr RBRACE RPAREN
+          (KEYWORD:elif COLON LPAREN expr LBRACE expr RBRACE RPAREN)*
+          (KEYWORD:else LBRACE expr RBRACE)?
+        : var-expr
+
+var-expr : (KEYWORD:def|KEYWORD:manip) LPAREN IDENTIFIER EQ expr RPAREN
+         : expr
+
+expr : comp-expr ((KEYWORD:and|KEYWORD:or) comp-expr)*
+
+comp-expr : KEYWORD:not comp-expr
+          : arith-expr ((EE|LT|GTE|LTE|GT) arith-expr)*
+
+arith-expr : term ((PLUS|MINUS) term)*
 
 term : power ((MUL|DIV) power)*
 
@@ -7,5 +20,3 @@ power : factor (POWER factor)*
 factor : NUM|IDENTIFIER|KEYWORD:True|KEYWORD:False
        : (PLUS|MINUS) factor
        : LPAREN expr RPAREN
-       : KEYWORD:def LPAREN IDENTIFIER EQ expr RPAREN
-       : KEYWORD:manip LPAREN IDENTIFIER[defined] EQ expr RPAREN
