@@ -541,7 +541,7 @@ class Parser:
             if res.error:
                 return res
             return res.success(UnaryOpNode(tok, factor))
-        elif tok.type == TT_LSQUARE or tok.type == TT_STRING:
+        elif tok.type in (TT_LSQUARE, TT_IDENTIFIER, TT_STRING, TT_NUM, TT_IDENTIFIER):
             listexpr = res.register(self.listcall())
             if res.error: return res
             return res.success(listexpr)
@@ -555,21 +555,7 @@ class Parser:
                 res.register_advancement()
                 self.advance()
                 return res.success(expr)
-            return res.failure(Error(pos_startt, self.current_tok.pos_end, 202, "Parenthesis"))        
-        elif tok.type == TT_NUM:
-            res.register_advancement()
-            self.advance()
-            return res.success(NumberNode(tok))
-        elif tok.type == TT_IDENTIFIER:
-            res.register_advancement()
-            self.advance()
-            if tok.value == "False":
-                return res.success(BooleanNode(tok))
-            if tok.value == "True":
-                return res.success(BooleanNode(tok))
-            if tok.value == "None":
-                return res.success(NoneTypeNode(tok))
-            return res.success(VarAccessNode(tok))
+            return res.failure(Error(pos_startt, self.current_tok.pos_end, 202, "Parenthesis"))
         return res.failure(Error(tok.pos_start, tok.pos_end, 201, "Expression or Number"))
         
     def parse(self):
@@ -704,6 +690,7 @@ class Parser:
         
     def listexpr(self):
         res = ParseResult()
+        tok = self.current_tok
         if self.current_tok.type == TT_LSQUARE:
             pos_s = self.current_tok.pos_start.copy()
             res.register_advancement()
@@ -732,10 +719,24 @@ class Parser:
             res.register_advancement()
             self.advance()
             return res.success(ListNode(arg_nodes, pos_s, pos_e))
-        tok = self.current_tok
-        res.register_advancement()
-        self.advance()
-        return res.success(StringNode(tok))
+        elif tok.type == TT_STRING:
+            res.register_advancement()
+            self.advance()
+            return res.success(StringNode(tok))
+        elif tok.type == TT_NUM:
+            res.register_advancement()
+            self.advance()
+            return res.success(NumberNode(tok))
+        elif tok.type == TT_IDENTIFIER:
+            res.register_advancement()
+            self.advance()
+            if tok.value == "False":
+                return res.success(BooleanNode(tok))
+            if tok.value == "True":
+                return res.success(BooleanNode(tok))
+            if tok.value == "None":
+                return res.success(NoneTypeNode(tok))
+            return res.success(VarAccessNode(tok))
         
     def listcall(self):
         res = ParseResult()

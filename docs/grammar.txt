@@ -33,9 +33,11 @@ power : call (POWER call)*
 
 call : factor (LPAREN (expr (COMMA expr)*)? RPAREN)?
 
-factor : NUM|IDENTIFIER|STRING
-       : (PLUS|MINUS) factor
+factor : (PLUS|MINUS) factor
        : LPAREN expr RPAREN
-       : list-expr
+       : list-call
+
+list-call : list-expr (TT_PIPE list-expr)*
 
 list-expr : LSQAURE (expr (COMMA expr)*)? RPAREN
+          : STRING
