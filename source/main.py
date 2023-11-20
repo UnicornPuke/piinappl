@@ -29,6 +29,9 @@ TT_EOF = 'EOF'
 TT_COLON = "COLON"
 TT_COMMA = "COMMA"
 TT_STRING = "STRING"
+TT_LSQUARE = "LSQUARE"
+TT_RSQUARE = "RSQUARE"
+TT_PIPE = "PIPE"
 
 class Error:
     def __init__(self, pos_start, pos_end, error_code, details, context=None):
@@ -67,6 +70,8 @@ class Error:
             self.error_name = f"Too many arguments passed into"
         if self.error_code == 308:
             self.error_name = f"Too few arguments passed into"
+        if self.error_code == 309:
+            self.error_name = f"Number out of list index range"
     def as_string(self):
         if self.error_code > 300:
             result = self.generate_traceback()
@@ -196,11 +201,20 @@ class Lexer:
             elif self.current_char == ")":
                 tokens.append(Token(TT_RPAREN,pos_start=self.pos))
                 self.advance()
+            elif self.current_char == "|":
+                tokens.append(Token(TT_PIPE,pos_start=self.pos))
+                self.advance()
             elif self.current_char == "{":
                 tokens.append(Token(TT_LBRACE,pos_start=self.pos))
                 self.advance()
             elif self.current_char == "}":
                 tokens.append(Token(TT_RBRACE,pos_start=self.pos))
+                self.advance()
+            elif self.current_char == "[":
+                tokens.append(Token(TT_LSQUARE,pos_start=self.pos))
+                self.advance()
+            elif self.current_char == "]":
+                tokens.append(Token(TT_RSQUARE,pos_start=self.pos))
                 self.advance()
             elif self.current_char == "^":
                 tokens.append(Token(TT_POWER,pos_start=self.pos))
@@ -447,6 +461,14 @@ class LoopNode:
 
 		self.pos_start = self.amount.pos_start
 		self.pos_end = self.body_node.pos_end
+
+class ListNode:
+    def __init__(self, things, pos_start, pos_end):
+        self.things = things
+        self.pos_start = pos_start
+        self.pos_end = pos_end
+		
+
 class FuncDefNode:
 	def __init__(self, var_name_tok, arg_name_toks, body_node):
 		self.var_name_tok = var_name_tok
@@ -519,7 +541,10 @@ class Parser:
             if res.error:
                 return res
             return res.success(UnaryOpNode(tok, factor))
-        
+        elif tok.type == TT_LSQUARE or tok.type == TT_STRING:
+            listexpr = res.register(self.listcall())
+            if res.error: return res
+            return res.success(listexpr)
         elif tok.type == TT_LPAREN:
             res.register_advancement()
             self.advance()
@@ -535,10 +560,6 @@ class Parser:
             res.register_advancement()
             self.advance()
             return res.success(NumberNode(tok))
-        elif tok.type == TT_STRING:
-            res.register_advancement()
-            self.advance()
-            return res.success(StringNode(tok))
         elif tok.type == TT_IDENTIFIER:
             res.register_advancement()
             self.advance()
@@ -680,6 +701,56 @@ class Parser:
             self.advance()
             
             return res.success(FuncDefNode(var_name_tok, arg_name_toks, atom))
+        
+    def listexpr(self):
+        res = ParseResult()
+        if self.current_tok.type == TT_LSQUARE:
+            pos_s = self.current_tok.pos_start.copy()
+            res.register_advancement()
+            self.advance()
+            arg_nodes = []
+            parenpos = self.current_tok.pos_start.copy()
+
+            if self.current_tok.type == TT_RSQUARE:
+                pass
+            else:
+                arg_nodes.append(res.register(self.expr()))
+                if res.error:
+                    return res.failure(Error(self.current_tok.pos_start, self.current_tok.pos_end, 201, 'Expression, Number, or "]"'))
+
+                while self.current_tok.type == TT_COMMA:
+                    res.register_advancement()
+                    self.advance()
+
+                    arg_nodes.append(res.register(self.expr()))
+                    if res.error: 
+                        return res
+
+                if self.current_tok.type != TT_RSQUARE:
+                    return res.failure(Error(parenpos, self.current_tok.pos_end, 202, 'Square Brackets'))
+            pos_e = self.current_tok.pos_end.copy()
+            res.register_advancement()
+            self.advance()
+            return res.success(ListNode(arg_nodes, pos_s, pos_e))
+        tok = self.current_tok
+        res.register_advancement()
+        self.advance()
+        return res.success(StringNode(tok))
+        
+    def listcall(self):
+        res = ParseResult()
+        left = res.register(self.listexpr())
+        if res.error:
+            return res
+        while self.current_tok.type == TT_PIPE:
+            op_tok = self.current_tok
+            res.register_advancement()
+            self.advance()
+            right = res.register(self.expr())
+            if res.error:
+                return res
+            left = BinOpNode(left, op_tok, right)
+        return res.success(left)
         
     def call(self):
         res = ParseResult()
@@ -1089,7 +1160,7 @@ class Parser:
             compexpr = res.register(self.compexpr())
             if res.error: return res
             return res.success(UnaryOpNode(op_tok, compexpr))
-        node = res.register(self.bin_op(self.arithexpr, [TT_EE, TT_LT, TT_GT, TT_LTE, TT_GTE]))
+        node = res.register(self.bin_op(self.arithexpr, [TT_EE, TT_LT, TT_GT, TT_LTE, TT_GTE, TT_NE]))
         
         if res.error:
             return res.failure(Error(self.current_tok.pos_start, self.current_tok.pos_end, 201, 'Expression or Number'))
@@ -1234,6 +1305,11 @@ class Number:
     
     def ored(self,other):
         return None, Error(self.pos_start, self.pos_end, 304, ["or", f"None and {other.type}"], self.context)
+    
+    def piped(self, other):
+        return None, Error(other.pos_start, other.pos_end,
+                    304, ["Number", other.type], self.context
+                )
         
     def set_context(self, context=None):
         self.context = context
@@ -1345,6 +1421,11 @@ class Boolean:
         else:
             number = 0
         return Boolean(number).set_context(self.context), None
+    
+    def piped(self, other):
+        return None, Error(other.pos_start, other.pos_end,
+                    304, ["Boolean", other.type], self.context
+                )
         
     def set_context(self, context=None):
         self.context = context
@@ -1427,6 +1508,11 @@ class Function:
         return None, Error(other.pos_start, other.pos_end,
                     304, ["Function", other.type], self.context
                 )
+        
+    def piped(self, other):
+        return None, Error(other.pos_start, other.pos_end,
+                    304, ["Function", other.type], self.context
+                )
 
     def execute(self, args):
         res = RTResult()
@@ -1480,12 +1566,160 @@ class Function:
         self.context = context
         return self
     
+class List:
+    def __init__(self, value):
+        self.set_pos()
+        self.set_context()
+        self.type = "List"
+        self.value = value
+        
+    def set_pos(self, pos_start=None, pos_end=None):
+        self.pos_start = pos_start
+        self.pos_end = pos_end
+        return self
+    
+    def copy(self):
+        copy = List(self.value)
+        copy.set_pos(self.pos_start, self.pos_end)
+        copy.set_context(self.context)
+        return copy
+    
+    def added_to(self, other):
+        if other.type == "List":
+            return List(self.value + other.value).set_context(self.context), None
+        new_list = self.copy()
+        new_list.value.append(other)
+        return new_list, None
+
+    def subbed_by(self, other):
+        if isinstance(other, Number):
+            new_list = self.copy()
+            try:
+                new_list.value.pop(other.value)
+                return new_list, None
+            except:
+                return None, Error(
+                    other.pos_start, other.pos_end,
+                    309, other.value,
+                    self.context
+                )
+        return None, Error(other.pos_start, other.pos_end,
+                    304, ["List", other.type], self.context
+                )
+
+    def multed_by(self, other):
+        if other.type == "Number":
+            if isinstance(other.value, float):
+                return None, Error(
+                    other.pos_start, other.pos_end,
+                    309, other.value,
+                    self.context
+                )
+            new_list = self.copy() 
+            new_list.value *= other.value
+            return new_list, None
+        return None, Error(other.pos_start, other.pos_end,
+                    304, ["List", other.type], self.context
+                )
+
+    def dived_by(self, other):
+        return None, Error(other.pos_start, other.pos_end,
+                    304, ["List", other.type], self.context
+                )
+        
+    def powed_by(self, other):
+        return None, Error(other.pos_start, other.pos_end,
+                    304, ["List", other.type], self.context
+                )
+        
+    def equals(self, other):
+        if self.value == other.value:
+            number = 1
+        else:
+            number = 0
+        return Boolean(number).set_context(self.context), None
+    
+    def not_equals(self, other):
+        if self.value != other.value:
+            number = 1
+        else:
+            number = 0
+        return Boolean(number).set_context(self.context), None
+    
+    def less_than(self, other):
+        return None, Error(other.pos_start, other.pos_end,
+                        304, ["List", other.type], self.context
+                    )
+    
+    def greater_than(self, other):
+        return None, Error(other.pos_start, other.pos_end,
+                        304, ["List", other.type], self.context
+                    )
+    
+    def less_than_equals(self, other):
+        return None, Error(other.pos_start, other.pos_end,
+                        304, ["List", other.type], self.context
+                    )
+    
+    def greater_than_equals(self, other):
+        return None, Error(other.pos_start, other.pos_end,
+                        304, ["List", other.type], self.context
+                    )
+    
+    def notted(self):
+        return None, Error(self.pos_start, self.pos_end, 304, ["not", "List"], self.context)
+    
+    def anded(self, other):
+        return None, Error(self.pos_start, self.pos_end, 304, ["and", f"List and {other.type}"], self.context)
+    
+    def ored(self,other):
+        return None, Error(self.pos_start, self.pos_end, 304, ["or", f"List and {other.type}"], self.context)
+    
+    def piped(self, other):
+        if other.type == "Number":
+            try:
+                return self.value[other.value], None
+            except:
+                return None, Error(
+                    other.pos_start, other.pos_end,
+                    309, other.value,
+                    self.context
+                )
+        return None, Error(other.pos_start, other.pos_end,
+                    304, ["List", other.type], self.context
+                )
+    
+    def set_context(self, context=None):
+        self.context = context
+        return self
+        
+    def __repr__(self):
+        return str(self.value)
+
+    
 class String:
     def __init__(self, value):
         self.set_pos()
         self.set_context()
         self.type = "String"
         self.value = str(value)
+        
+    def piped(self, other):
+        if other.type == "Number":
+            try:
+                newval = self.value[other.value]
+                copy = self.copy()
+                copy.value = newval
+                return copy, None
+            except:
+                return None, Error(
+                    other.pos_start, other.pos_end,
+                    309, other.value,
+                    self.context
+                )
+        return None, Error(other.pos_start, other.pos_end,
+                    304, ["List", other.type], self.context
+                )
         
     def set_pos(self, pos_start=None, pos_end=None):
         self.pos_start = pos_start
@@ -1573,7 +1807,7 @@ class String:
         return self
         
     def __repr__(self):
-        return str(self.value)
+        return f'"{str(self.value)}"'
 
 class NoneType:
     def __init__(self):
@@ -1661,6 +1895,11 @@ class NoneType:
     def ored(self,other):
         return None, Error(self.pos_start, self.pos_end, 304, ["or", f"None and {other.type}"], self.context)
     
+    def piped(self, other):
+        return None, Error(other.pos_start, other.pos_end,
+                    304, ["None", other.type], self.context
+                )
+    
     def set_context(self, context=None):
         self.context = context
         return self
@@ -1715,6 +1954,14 @@ class Interpreter:
         return RTResult().success(Number(node.tok.value).set_context(context).set_pos(node.pos_start, node.pos_end))
     def visit_StringNode(self, node, context):
         return RTResult().success(String(node.tok.value).set_context(context).set_pos(node.pos_start, node.pos_end))
+    def visit_ListNode(self, node, context):
+        res = RTResult()
+        lister = []
+        for i in node.things:
+            lister.append(res.register(self.visit(i, context)))
+            if res.error:
+                return res
+        return res.success(List(lister).set_context(context).set_pos(node.pos_start, node.pos_end))
     
     def visit_BooleanNode(self, node, context):
         if node.tok.value == "False":
@@ -1846,6 +2093,8 @@ class Interpreter:
             result,error= left.greater_than_equals(right)
         elif node.op_tok.type == TT_LTE:
             result,error= left.less_than_equals(right)
+        elif node.op_tok.type == TT_PIPE:
+            result,error= left.piped(right)
         elif node.op_tok.matches(TT_KEYWORD, 'or'):
             result, error= left.ored(right)
         elif node.op_tok.matches(TT_KEYWORD, 'and'):

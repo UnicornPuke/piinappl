@@ -31,8 +31,11 @@ term : power ((MUL|DIV) power)*
 
 power : call (POWER call)*
 
-call : 
+call : factor (LPAREN (expr (COMMA expr)*)? RPAREN)?
 
-factor : NUM|IDENTIFIER
+factor : NUM|IDENTIFIER|STRING
        : (PLUS|MINUS) factor
        : LPAREN expr RPAREN
+       : list-expr
+
+list-expr : LSQAURE (expr (COMMA expr)*)? RPAREN
