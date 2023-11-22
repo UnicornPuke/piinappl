@@ -1,3 +1,5 @@
+statements: NEWLINE* atom (NEWLINE+ atom)*
+
 atom : if-expr
      : for-expr
      : while-expr
@@ -6,19 +8,19 @@ atom : if-expr
      : func-def
      : expr
 
-if-expr : KEYWORD:if COLON LPAREN expr LBRACE expr RBRACE RPAREN
-          (KEYWORD:elif COLON LPAREN expr LBRACE expr RBRACE RPAREN)*
-          (KEYWORD:else LBRACE expr RBRACE)?
+if-expr : KEYWORD:if COLON LPAREN expr LBRACE statements RBRACE RPAREN
+          (KEYWORD:elif COLON LPAREN expr LBRACE statements RBRACE RPAREN)*
+          (KEYWORD:else LBRACE statements RBRACE)?
 
 var-expr : (KEYWORD:def|KEYWORD:manip) COLON LPAREN IDENTIFIER EQ expr RPAREN
 
-loop-expr : KEYWORD:loop COLON LPAREN expr LBRACE atom RBRACE RPAREN
+loop-expr : KEYWORD:loop COLON LPAREN expr LBRACE statements RBRACE RPAREN
 
-while-expr : KEYWORD:while COLON LPAREN expr LBRACE atom RBRACE RPAREN
+while-expr : KEYWORD:while COLON LPAREN expr LBRACE statments RBRACE RPAREN
 
-for-expr : KEYWORD:for COLON LPAREN IDENTIFIER KEYWORD:in expr KEYWORD:to expr (KEYWORD:step expr)? LBRACE atom RBRACE RPAREN
+for-expr : KEYWORD:for COLON LPAREN IDENTIFIER KEYWORD:in expr KEYWORD:to expr (KEYWORD:step expr)? LBRACE statements RBRACE RPAREN
 
-func-def : KEYWORD:func COLON LPAREN IDENTIFIER? LPAREN (IDENTIFIER (COMMA IDENTIFIER)*)? RPAREN LBRACE expr RBRACE RPAREN
+func-def : KEYWORD:func COLON LPAREN IDENTIFIER? LPAREN (IDENTIFIER (COMMA IDENTIFIER)*)? RPAREN LBRACE statements RBRACE RPAREN
 
 expr : comp-expr ((KEYWORD:and|KEYWORD:or) comp-expr)*
 
@@ -40,4 +42,4 @@ factor : (PLUS|MINUS) factor
 list-call : list-expr (TT_PIPE list-expr)*
 
 list-expr : LSQAURE (expr (COMMA expr)*)? RPAREN
-          : STRING
+          : STRING|NUM|IDENTIFIER

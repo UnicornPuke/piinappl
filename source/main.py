@@ -1,10 +1,11 @@
 from stringcolor import *
 from strings_with_arrows import *
 import string
+import math
 
 DIGITS = '0123456789'
 LETTERSDIGITS = DIGITS + string.ascii_letters
-KEYWORDS = ['def', 'manip', 'and', 'or', 'not', 'if', 'elif', 'else', 'in', 'to', 'step', 'while', 'for', 'loop', 'func']
+KEYWORDS = ['def', 'manip', 'and', 'or', 'not', 'if', 'elif', 'else', 'in', 'to', 'step', 'while', 'for', 'loop', 'func', 'return', 'continue', 'break']
 TT_NUM = 'NUM'
 TT_FLOAT = 'FLOAT'
 TT_PLUS = 'PLUS'
@@ -32,6 +33,7 @@ TT_STRING = "STRING"
 TT_LSQUARE = "LSQUARE"
 TT_RSQUARE = "RSQUARE"
 TT_PIPE = "PIPE"
+TT_NEWLINE = "NEWLINE"
 
 class Error:
     def __init__(self, pos_start, pos_end, error_code, details, context=None):
@@ -72,6 +74,8 @@ class Error:
             self.error_name = f"Too few arguments passed into"
         if self.error_code == 309:
             self.error_name = f"Number out of list index range"
+        if self.error_code == 310:
+            self.error_name = f"Built-in function doesn't support type"
     def as_string(self):
         if self.error_code > 300:
             result = self.generate_traceback()
@@ -132,8 +136,8 @@ class Position:
     def advance(self, current_char=None):
         self.idx += 1
         self.col += 1
-
-        if current_char == '\n':
+        
+        if current_char in (';', '\n'):
             self.ln += 1
             self.col = 0
 
@@ -179,6 +183,9 @@ class Lexer:
         
         while self.current_char != None:
             if self.current_char in ' \t':
+                self.advance()
+            elif self.current_char in ';\n':
+                tokens.append(Token(TT_NEWLINE, pos_start=self.pos))
                 self.advance()
             elif self.current_char == "+":
                 tokens.append(Token(TT_PLUS, pos_start=self.pos))
@@ -501,6 +508,7 @@ class ParseResult:
         self.error = None
         self.node = None
         self.advance_count = 0
+        self.to_reverse_count = 0
         
     def register_advancement(self):
         self.advance_count += 1
@@ -518,17 +526,30 @@ class ParseResult:
         self.error = error
         return self
     
+    def try_register(self, res):
+        if res.error:
+            self.to_reverse_count = res.advance_count
+            return None
+        return self.register(res)
+    
 class Parser:
     def __init__(self, tokens):
         self.tokens = tokens
         self.tok_idx = -1
         self.advance()
         
+    def reverse(self, amount=1):
+        self.tok_idx -= amount
+        self.update_current_tok()
+        return self.current_tok
+
     def advance(self):
         self.tok_idx += 1
+        self.update_current_tok()
+        
+    def update_current_tok(self): 
         if self.tok_idx < len(self.tokens):
             self.current_tok = self.tokens[self.tok_idx]
-        return self.current_tok
     
     def factor(self):
         res = ParseResult()
@@ -559,7 +580,7 @@ class Parser:
         return res.failure(Error(tok.pos_start, tok.pos_end, 201, "Expression or Number"))
         
     def parse(self):
-        res = self.atom()
+        res = self.statements()
         if not res.error and self.current_tok.type != TT_EOF:
             if isinstance(res.node, IfNode):
                 return res.failure(Error(self.current_tok.pos_start, self.current_tok.pos_end, 203, "If"))
@@ -670,7 +691,7 @@ class Parser:
             self.advance()
             
             bracepos = self.current_tok.pos_start.copy()
-            atom = res.register(self.atom())
+            atom = res.register(self.statements())
             if res.error:
                 return res
             
@@ -847,7 +868,7 @@ class Parser:
             self.advance()
             
             bracepos = self.current_tok.pos_start.copy()
-            expr = res.register(self.atom())
+            expr = res.register(self.statements())
             if res.error:
                 return res
             
@@ -865,7 +886,7 @@ class Parser:
             self.advance()
             
             return res.success(ForNode(var_name, start, end, step_value, expr))
-    
+        
     def whileexpr(self):
         res = ParseResult()
         if self.current_tok.matches(TT_KEYWORD, 'while'):
@@ -896,7 +917,7 @@ class Parser:
             self.advance()
             
             bracepos = self.current_tok.pos_start.copy()
-            expr = res.register(self.atom())
+            expr = res.register(self.statements())
             if res.error:
                 return res
             
@@ -913,6 +934,44 @@ class Parser:
             self.advance()
             
             return res.success(WhileNode(condition, expr))
+        
+    def statements(self):
+        res = ParseResult()
+        statements = []
+        pos_start = self.current_tok.pos_start.copy()
+        while self.current_tok.type == TT_NEWLINE:
+            res.register_advancement()
+            self.advance()
+            
+        statement = res.register(self.atom())
+        if res.error:
+            return res
+        statements.append(statement)
+        
+        more_statements = True
+        
+        while True:
+            newline_count = 0
+            while self.current_tok.type == TT_NEWLINE:
+                res.register_advancement()
+                self.advance()
+                newline_count += 1
+            if newline_count == 0:
+                more_statements = False
+                
+            if not more_statements: break
+            statement = res.try_register(self.expr())
+            if not statement:
+                self.reverse(res.to_reverse_count)
+                more_statements = False
+                continue
+            statements.append(statement)
+            
+        return res.success(ListNode(
+            statements,
+            pos_start,
+            self.current_tok.pos_end.copy()
+            ))                
         
     def loopexpr(self):
         res = ParseResult()
@@ -944,7 +1003,7 @@ class Parser:
             self.advance()
             
             bracepos = self.current_tok.pos_start.copy()
-            expr = res.register(self.atom())
+            expr = res.register(self.statements())
             if res.error:
                 return res
             
@@ -999,7 +1058,7 @@ class Parser:
             self.advance()
             
             bracepos = self.current_tok.pos_start.copy()
-            expr = res.register(self.expr())
+            expr = res.register(self.statements())
             if res.error:
                 return res
             
@@ -1044,7 +1103,7 @@ class Parser:
                 self.advance()
                 
                 bracepos = self.current_tok.pos_start.copy()
-                expr = res.register(self.expr())
+                expr = res.register(self.statements())
                 if res.error:
                     return res
                 
@@ -1079,7 +1138,7 @@ class Parser:
                 self.advance()
                 
                 bracepos = self.current_tok.pos_start.copy()
-                expr = res.register(self.expr())
+                expr = res.register(self.statements())
                 if res.error:
                     return res
                 
@@ -1434,26 +1493,54 @@ class Boolean:
         
     def __repr__(self):
         return str(bool(self.value))
-
-class Function:
-    def __init__(self, name, body_node, arg_names):
+    
+class BaseFunction:
+    def __init__(self, name):
         self.set_pos()
         self.set_context()
-        self.type = "Function"
-        self.name = name or "<anonymous>"
-        self.body_node = body_node
-        self.arg_names = arg_names
+        self.name = name or '<anonymous>'
         
     def set_pos(self, pos_start=None, pos_end=None):
         self.pos_start = pos_start
         self.pos_end = pos_end
         return self
+        
+    def generate_new_context(self):
+        new_context = Context(self.name, self.context, self.pos_start)
+        new_context.symbol_table = SymbolTable(new_context.parent.symbol_table)
+        return new_context
     
-    def copy(self):
-        copy = Function(self.name, self.body_node, self.arg_names)
-        copy.set_pos(self.pos_start, self.pos_end)
-        copy.set_context(self.context)
-        return copy
+    def check_args(self, arg_names, args):
+        res = RTResult()
+        if len(args) > len(arg_names):
+            return res.failure(Error(
+                self.pos_start, self.pos_end, 307,
+                f"{len(args) - len(arg_names)} into '{self.name}'",
+                self.context
+            ))
+        
+        if len(args) < len(arg_names):
+            return res.failure(Error(
+                self.pos_start, self.pos_end, 308,
+                f"{len(arg_names) - len(args)} into '{self.name}'",
+                self.context
+            ))
+        return res.success(None)
+    
+    def populate_args(self,arg_names, args, exec_ctx):
+        for i in range(len(args)):
+            arg_name = arg_names[i]
+            arg_value = args[i]
+            arg_value.set_context(exec_ctx)
+            exec_ctx.symbol_table.set_(arg_name, arg_value)
+            
+    def check_and_populate_args(self, arg_names, args, exec_ctx):
+        res = RTResult()
+        res.register(self.check_args(arg_names, args))
+        if res.error:
+            return res
+        self.populate_args(arg_names, args, exec_ctx)
+        return res.success(None)
     
     def added_to(self, other):
         return None, Error(other.pos_start, other.pos_end,
@@ -1514,46 +1601,7 @@ class Function:
         return None, Error(other.pos_start, other.pos_end,
                     304, ["Function", other.type], self.context
                 )
-
-    def execute(self, args):
-        res = RTResult()
-        interpreter = Interpreter()
-        new_context = Context(self.name, self.context, self.pos_start)
-        new_context.symbol_table = SymbolTable(new_context.parent.symbol_table)
-
-        if len(args) > len(self.arg_names):
-            return res.failure(Error(
-                self.pos_start, self.pos_end, 307,
-                f"{len(args) - len(self.arg_names)} into '{self.name}'",
-                self.context
-            ))
         
-        if len(args) < len(self.arg_names):
-            return res.failure(Error(
-                self.pos_start, self.pos_end, 308,
-                f"{len(self.arg_names) - len(args)} into '{self.name}'",
-                self.context
-            ))
-
-        for i in range(len(args)):
-            arg_name = self.arg_names[i]
-            arg_value = args[i]
-            arg_value.set_context(new_context)
-            new_context.symbol_table.set_(arg_name, arg_value)
-
-        value = res.register(interpreter.visit(self.body_node, new_context))
-        if res.error: return res
-        return res.success(value)
-
-    def copy(self):
-        copy = Function(self.name, self.body_node, self.arg_names)
-        copy.set_context(self.context)
-        copy.set_pos(self.pos_start, self.pos_end)
-        return copy
-
-    def __repr__(self):
-        return f"<function {self.name}>"
-
     def notted(self):
         return None, Error(self.pos_start, self.pos_end, 304, ["not", "Function"], self.context)
     
@@ -1566,7 +1614,89 @@ class Function:
     def set_context(self, context=None):
         self.context = context
         return self
+
+class Function(BaseFunction):
+    def __init__(self, name, body_node, arg_names):
+        super().__init__(name)
+        self.type = "Function"
+        self.body_node = body_node
+        self.arg_names = arg_names
+        
+    def set_pos(self, pos_start=None, pos_end=None):
+        self.pos_start = pos_start
+        self.pos_end = pos_end
+        return self
     
+    def copy(self):
+        copy = Function(self.name, self.body_node, self.arg_names)
+        copy.set_pos(self.pos_start, self.pos_end)
+        copy.set_context(self.context)
+        return copy
+
+    def execute(self, args):
+        res = RTResult()
+        interpreter = Interpreter()
+        exec_ctx = self.generate_new_context()
+
+        res.register(self.check_and_populate_args(self.arg_names, args, exec_ctx))
+
+        value = res.register(interpreter.visit(self.body_node, exec_ctx))
+        if res.error: return res
+        return res.success(value)
+    def __repr__(self):
+        return f"<function {self.name}>"
+    
+class BuiltInFunction(BaseFunction):
+    def __init__(self, name):
+        super().__init__(name)
+        self.type = "Function"
+        
+    def no_visit_method(self, node, context):
+        raise Exception(f'[INTERNAL] Error code 402 - No execute method defnied: {type(node).__name__}')
+        
+    def execute(self, args):
+        res = RTResult()
+        exec_ctx = self.generate_new_context()
+        
+        method_name = f'execute_{self.name}'
+        method = getattr(self, method_name, self.no_visit_method)
+        
+        res.register(self.check_and_populate_args(method.arg_names, args, exec_ctx))
+        if res.error:
+            return res
+        
+        return_value = res.register(method(exec_ctx))
+        if res.error:
+            return res
+        return res.success(return_value)
+        
+    def copy(self):
+        copy = BuiltInFunction(self.name)
+        copy.set_pos(self.pos_start, self.pos_end)
+        copy.set_context(self.context)
+        return copy
+    
+    def __repr__(self):
+        return f"<built-in function {self.name}>"
+    
+    def execute_print(self, exec_ctx):
+        if isinstance(exec_ctx.symbol_table.get('value'), String):
+            print(str(exec_ctx.symbol_table.get('value').value))
+        else:
+            print(str(exec_ctx.symbol_table.get('value')))
+        x = RTResult().success(NoneType().set_pos(self.pos_start, self.pos_end).set_context(self.context))
+        return x
+    execute_print.arg_names = ['value']
+    
+    def execute_factorial(self, exec_ctx):
+        if isinstance(exec_ctx.symbol_table.get('value'), Number) and isinstance(exec_ctx.symbol_table.get('value').value, int) and exec_ctx.symbol_table.get('value').value > 0:
+            x = RTResult().success(Number(math.factorial(exec_ctx.symbol_table.get('value').value)).set_pos(self.pos_start, self.pos_end).set_context(self.context))
+        else:
+            x = RTResult().failure(Error(self.pos_start, self.pos_end, 310, f'{exec_ctx.symbol_table.get("value").type}:{exec_ctx.symbol_table.get("value").value}'))
+        return x
+    execute_factorial.arg_names = ['value']
+    
+            
 class List:
     def __init__(self, value):
         self.set_pos()
@@ -1746,9 +1876,11 @@ class String:
                 )
 
     def multed_by(self, other):
+        if other.type == "Number":
+            return String(self.value * other.value).set_context(self.context), None
         return None, Error(other.pos_start, other.pos_end,
                     304, ["String", other.type], self.context
-                )
+        )
 
     def dived_by(self, other):
         return None, Error(other.pos_start, other.pos_end,
@@ -1907,7 +2039,14 @@ class NoneType:
         
     def __repr__(self):
         return "None"
-        
+    
+Boolean.true = Boolean(1)
+Boolean.false = Boolean(0)
+NoneType.none = NoneType()
+PRESETSV = ["True", "False", "None"]
+BuiltInFunction.print = BuiltInFunction("print")
+BuiltInFunction.factorial = BuiltInFunction("factorial")
+PRESETSD = ["print", "factorial", 'range'] + PRESETSV
     
 class Interpreter:
     def visit(self, node, context):
@@ -1926,7 +2065,7 @@ class Interpreter:
         if not value:
             return res.failure(Error(node.pos_start, node.pos_end, 302, var_name, context))
         
-        value = value.copy().set_pos(node.pos_start, node.pos_end)
+        value = value.copy().set_pos(node.pos_start, node.pos_end).set_context(context)
         return res.success(value)
     
     def visit_VarAssignNode(self, node, context):
@@ -1943,7 +2082,7 @@ class Interpreter:
                 return res.failure(Error(node.pos_start, node.pos_end, 303, var_name, context))
             context.symbol_table.set_(var_name, value)
         else:
-            if var_name in ["True", "False", "None"]:
+            if var_name in PRESETSV:
                 return res.failure(Error(node.pos_start, node.pos_end, 305, var_name, context))
             if not context.symbol_table.get(var_name):
                 return res.failure(Error(node.pos_start, node.pos_end, 302, var_name, context))
@@ -2043,6 +2182,9 @@ class Interpreter:
         arg_names = [arg_name.value for arg_name in node.arg_name_toks]
         func_value = Function(func_name, body_node, arg_names).set_context(context).set_pos(node.pos_start, node.pos_end)
         
+        if func_name in PRESETSD:
+            return res.failure(Error(node.pos_start, node.pos_end, 305, func_name, context))
+        
         if node.var_name_tok:
             context.symbol_table.set_(func_name, func_value)
             
@@ -2062,6 +2204,7 @@ class Interpreter:
             
         return_value = res.register(value_to_call.execute(args))
         if res.error: return res
+        return_value = return_value.copy().set_pos(node.pos_start, node.pos_end).set_context(context)
         return res.success(return_value)
         
     def visit_BinOpNode(self, node, context):
@@ -2145,9 +2288,11 @@ class Interpreter:
         return res.success(None)
         
 global_symbol_table = SymbolTable()
-global_symbol_table.set_("True", Boolean(1))
-global_symbol_table.set_("False", Boolean(0))
+global_symbol_table.set_("True", Boolean.true)
+global_symbol_table.set_("False", Boolean.false)
 global_symbol_table.set_("None", NoneType())
+global_symbol_table.set_("print", BuiltInFunction.print)
+global_symbol_table.set_("factorial", BuiltInFunction.factorial)
         
 def run(text):
     lexer = Lexer("<stdin>", text)
