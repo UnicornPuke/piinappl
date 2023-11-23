@@ -1,4 +1,7 @@
-statements: NEWLINE* atom (NEWLINE+ atom)*
+statements : NEWLINE* statement (NEWLINE+ statement)*
+
+statement : KEYWORD:return COLON LPAREN expr RPAREN
+          : KEYWORD:break|KEYWORD:continue
 
 atom : if-expr
      : for-expr
