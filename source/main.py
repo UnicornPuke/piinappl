@@ -34,6 +34,7 @@ TT_LSQUARE = "LSQUARE"
 TT_RSQUARE = "RSQUARE"
 TT_PIPE = "PIPE"
 TT_NEWLINE = "NEWLINE"
+TT_POINT = "POINT"
 
 class Error:
     def __init__(self, pos_start, pos_end, error_code, details, context=None):
@@ -76,6 +77,10 @@ class Error:
             self.error_name = f"Item out of index range"
         if self.error_code == 310:
             self.error_name = f"Built-in function doesn't support type"
+        if self.error_code == 311:
+            self.error_name = f"Couldn't find attribute"
+        if self.error_code == 312:
+            self.error_name = f"Can't edit attribute"
     def as_string(self):
         if self.error_code > 300:
             result = self.generate_traceback()
@@ -258,8 +263,10 @@ class Lexer:
             elif self.current_char in DIGITS + ".":
                 numby, pos = self.make_number()
                 if numby == "wazup":
-                    return [], Error(pos, self.pos, 102, '"."')
+                    return [], Error(pos[0], self.pos, 102, f'"{pos[1]}"')
                 tokens.append(numby)
+                if pos:
+                    tokens.append(pos)
             elif self.current_char in string.ascii_letters + "_":
                 tokens.append(self.make_words())
             else:
@@ -303,10 +310,14 @@ class Lexer:
                 num_str += '.'
             else:
                 num_str += self.current_char
+            pos_end = self.pos.copy()
             self.advance()
             
         if num_str == '.':
-            return "wazup", pos_start
+            return Token(TT_POINT, pos_start=pos_start), None
+        else:
+            if num_str[len(num_str)- 1] == '.':
+                return Token(TT_NUM, float(num_str.replace(".", "")), pos_start, pos_end), Token(TT_POINT, pos_start=self.pos)
             
         if dot_count == 1:
             return Token(TT_NUM, float(num_str), pos_start, self.pos), None
@@ -454,6 +465,14 @@ class UnaryOpNode:
         
     def __repr__(self):
         return f'({self.op_tok}, {self.node})'
+    
+class AttributeNode:
+    def __init__(self, parent, child):
+        self.parent = parent
+        self.child = child
+        
+        self.pos_start = self.parent.pos_start
+        self.pos_end= self.child.pos_end
     
 class ReturnNode:
     def __init__(self, node_to_return, pos_start, pos_end):
@@ -896,6 +915,14 @@ class Parser:
             if res.error:
                 return res
             left = BinOpNode(left, op_tok, right)
+        while self.current_tok.type == TT_POINT:
+            op_tok = self.current_tok
+            res.register_advancement()
+            self.advance()
+            right = res.register(self.listexpr())
+            if res.error:
+                return res
+            left = AttributeNode(left, right)
         return res.success(left)
     
     def varcall(self):
@@ -911,6 +938,14 @@ class Parser:
             if res.error:
                 return res
             left = BinOpNode(left, op_tok, right)
+        while self.current_tok.type == TT_POINT:
+            op_tok = self.current_tok
+            res.register_advancement()
+            self.advance()
+            right = res.register(self.listr())
+            if res.error:
+                return res
+            left = AttributeNode(left, right)
         return res.success(left)
         
     def call(self):
@@ -1519,6 +1554,21 @@ class Number:
         self.set_pos()
         self.set_context()
         self.type = "Number"
+        self.built_in = ["type", "length"]
+        self.attributes = {}
+        
+    def attribute(self,child):
+        if self.value % self.value == 0:
+            length = len(str(int(self.value)))
+        else:
+            length = len(str(self.value))
+        self.attributes = {"type": String("Number"), "length": Number(length)}
+        hello = self.attributes.get(child.var_name_tok.value).set_pos(self.pos_start, self.pos_end).set_context(self.context)
+        if not hello:
+            return None, Error(child.pos_start, child.pos_end,
+                    311, child.var_name_tok.value, self.context
+                )
+        return hello,None
         
     def set_pos(self, pos_start=None, pos_end=None):
         self.pos_start = pos_start
@@ -1641,6 +1691,17 @@ class Boolean:
         self.set_pos()
         self.set_context()
         self.type = "Boolean"
+        self.built_in = ["type"]
+        self.attributes = {}
+        
+    def attribute(self,child):
+        self.attributes = {"type": String("Boolean")}
+        hello = self.attributes.get(child.var_name_tok.value).set_pos(self.pos_start, self.pos_end).set_context(self.context)
+        if not hello:
+            return None, Error(child.pos_start, child.pos_end,
+                    311, child.var_name_tok.value, self.context
+                )
+        return hello,None
         
     def set_pos(self, pos_start=None, pos_end=None):
         self.pos_start = pos_start
@@ -1750,6 +1811,17 @@ class BaseFunction:
         self.set_pos()
         self.set_context()
         self.name = name or '<anonymous>'
+        self.built_in = ["type", "name"]
+        self.attributes = {}
+        
+    def attribute(self,child):
+        self.attributes = {"name": String(self.name), "type": String("Function")}
+        hello = self.attributes.get(child.var_name_tok.value).set_pos(self.pos_start, self.pos_end).set_context(self.context)
+        if not hello:
+            return None, Error(child.pos_start, child.pos_end,
+                    311, child.var_name_tok.value, self.context
+                )
+        return hello,None
         
     def set_pos(self, pos_start=None, pos_end=None):
         self.pos_start = pos_start
@@ -1958,6 +2030,17 @@ class List:
         self.set_context()
         self.type = "List"
         self.value = value
+        self.built_in = ["type", "length"]
+        self.attributes = {}
+        
+    def attribute(self,child):
+        self.attributes = {"length": Number(len(self.value)), "type": String("List")}
+        hello = self.attributes.get(child.var_name_tok.value).set_pos(self.pos_start, self.pos_end).set_context(self.context)
+        if not hello:
+            return None, Error(child.pos_start, child.pos_end,
+                    311, child.var_name_tok.value, self.context
+                )
+        return hello,None
         
     def set_pos(self, pos_start=None, pos_end=None):
         self.pos_start = pos_start
@@ -2101,6 +2184,17 @@ class Dictionary:
         self.set_context()
         self.type = "Dictionary"
         self.value = value
+        self.built_in = ["type", "keys", "values"]
+        self.attributes = {}
+        
+    def attribute(self,child):
+        self.attributes = {"keys": List(list(self.value.keys())),"values": List(list(self.value.values())), "type": String("Dictionary")}
+        hello = self.attributes.get(child.var_name_tok.value).set_pos(self.pos_start, self.pos_end).set_context(self.context)
+        if not hello:
+            return None, Error(child.pos_start, child.pos_end,
+                    311, child.var_name_tok.value, self.context
+                )
+        return hello,None
         
     def set_pos(self, pos_start=None, pos_end=None):
         self.pos_start = pos_start
@@ -2251,6 +2345,17 @@ class String:
         self.set_context()
         self.type = "String"
         self.value = str(value)
+        self.built_in = ["type", "length"]
+        self.attributes = {}
+        
+    def attribute(self,child):
+        self.attributes = {"type": String("String"), "length": Number(len(self.value))}
+        hello = self.attributes.get(child.var_name_tok.value).set_pos(self.pos_start, self.pos_end).set_context(self.context)
+        if not hello:
+            return None, Error(child.pos_start, child.pos_end,
+                    311, child.var_name_tok.value, self.context
+                )
+        return hello,None
         
     def piped(self, other):
         if other.type == "Number":
@@ -2365,6 +2470,17 @@ class NoneType:
         self.set_context()
         self.type = "None"
         self.value = 0
+        self.built_in = ["type"]
+        self.attributes = {}
+        
+    def attribute(self,child):
+        self.attributes = {"type": String("None")}
+        hello = self.attributes.get(child.var_name_tok.value).set_pos(self.pos_start, self.pos_end).set_context(self.context)
+        if not hello:
+            return None, Error(child.pos_start, child.pos_end,
+                    311, child.var_name_tok.value, self.context
+                )
+        return hello,None
         
     def set_pos(self, pos_start=None, pos_end=None):
         self.pos_start = pos_start
@@ -2514,7 +2630,7 @@ class Interpreter:
             
             if var_type == 'def':
                 context.symbol_table.set_(var_name, value)
-        else:
+        elif isinstance(node.var_name_tok, BinOpNode):
             var_name = res.register(self.visit(node.var_name_tok,context))
             if res.should_return():
                 return res
@@ -2536,6 +2652,18 @@ class Interpreter:
                             copy.value[i] = value
                 except Exception as e:
                     return res.failure(Error(rists.pos_start, rists.pos_end, 309, rists.value, context))
+        else:
+            var_name = res.register(self.visit(node.var_name_tok.parent,context))
+            if res.should_return():
+                return res
+            child = node.var_name_tok.child.var_name_tok.value
+            if res.should_return():
+                return res
+            copy = var_name.copy()
+            if isinstance(var_name.copy(), Parser):
+                pass
+            else:
+                return res.failure(Error(node.var_name_tok.pos_start, node.var_name_tok.pos_end, 312, f'{node.var_name_tok.parent.var_name_tok.value}.{node.var_name_tok.child.var_name_tok.value}', context))
         return res.success(value)
     
     def visit_NumberNode(self, node, context):
@@ -2711,13 +2839,23 @@ class Interpreter:
             
         return res.success(func_value)
     
+    def visit_AttributeNode(self, node, context):
+        res = RTResult()
+        left = res.register(self.visit(node.parent, context))
+        if res.should_return(): return res
+        
+        result, error = left.attribute(node.child)
+        
+        if error:
+            return res.failure(error)
+        else:
+            return res.success(result.set_context(context).set_pos(node.pos_start, node.pos_end))
         
     def visit_BinOpNode(self, node, context):
         res = RTResult()
         left = res.register(self.visit(node.left_node, context))
         if res.should_return(): return res
         right = res.register(self.visit(node.right_node, context))
-        self.left = left
         
         if res.should_return(): return res
         
