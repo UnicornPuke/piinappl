@@ -5,7 +5,7 @@ import math
 
 DIGITS = '0123456789'
 LETTERSDIGITS = DIGITS + string.ascii_letters
-KEYWORDS = ['def', 'and', 'or', 'not', 'if', 'elif', 'else', 'in', 'to', 'step', 'while', 'for', 'loop', 'func', 'return', 'continue', 'break']
+KEYWORDS = ['def', 'class','and', 'or', 'not', 'if', 'elif', 'else', 'in', 'to', 'step', 'while', 'for', 'loop', 'func', 'return', 'continue', 'break']
 TT_NUM = 'NUM'
 TT_FLOAT = 'FLOAT'
 TT_PLUS = 'PLUS'
@@ -35,6 +35,12 @@ TT_RSQUARE = "RSQUARE"
 TT_PIPE = "PIPE"
 TT_NEWLINE = "NEWLINE"
 TT_POINT = "POINT"
+# TT_MODULO = "MODULO"
+# TT_PLUSEQ = "PLUSEQ"
+# TT_MINUSEQ = "MINUSEQ"
+# TT_MULEQ = "MULEQ"
+# TT_DIVEQ = "DIVEQ"
+# TT_MODULOEQ = "MODULOEQ"
 
 class Error:
     def __init__(self, pos_start, pos_end, error_code, details, context=None):
@@ -551,6 +557,14 @@ class FuncDefNode:
             self.pos_start = self.body_node.pos_start
 
         self.pos_end = self.body_node.pos_end
+        
+class ClassDefNode:
+    def __init__(self, var_name_tok, body_node):
+        self.var_name_tok = var_name_tok
+        self.body_node = body_node
+
+        self.pos_start = self.var_name_tok.pos_start
+        self.pos_end = self.body_node.pos_end
 
 class CallNode:
 	def __init__(self, node_to_call, arg_nodes):
@@ -607,7 +621,6 @@ class Parser:
     def advance(self):
         self.tok_idx += 1
         self.update_current_tok()
-        # print(self.current_tok)
         
     def update_current_tok(self): 
         if self.tok_idx < len(self.tokens):
@@ -681,11 +694,65 @@ class Parser:
             funcexpr = res.register(self.funcexpr())
             if res.error: return res
             return res.success(funcexpr)
+        elif self.current_tok.matches(TT_KEYWORD, 'class'):
+            funcexpr = res.register(self.classexpr())
+            if res.error: return res
+            return res.success(funcexpr)
         else:
             expr = res.register(self.call_b())
             if res.error: 
                 return res
             return res.success(expr)
+        
+    def classexpr(self):
+        res = ParseResult()
+        if self.current_tok.matches(TT_KEYWORD, 'class'):
+            res.register_advancement()
+            self.advance()
+            
+            if self.current_tok.type != TT_COLON:
+                return res.failure(Error(self.current_tok.pos_start, self.current_tok.pos_end, 201, '":"'))
+            
+            res.register_advancement()
+            self.advance()
+            
+            if self.current_tok.type != TT_LPAREN:
+                return res.failure(Error(self.current_tok.pos_start, self.current_tok.pos_end, 201, '"("'))
+            
+            res.register_advancement()
+            self.advance()
+            parenpos1 = self.current_tok.pos_start.copy()
+            
+            if not self.current_tok.type == TT_IDENTIFIER:
+                return res.failure(Error(self.current_tok.pos_start, self.current_tok.pos_end, 201, 'Identifier'))
+            var_name_tok = self.current_tok
+            res.register_advancement()
+            self.advance()
+                
+            if self.current_tok.type != TT_LBRACE:
+                return res.failure(Error(self.current_tok.pos_start, self.current_tok.pos_end, 201, '"{"'))
+            
+            res.register_advancement()
+            self.advance()
+            
+            bracepos = self.current_tok.pos_start.copy()
+            atom = res.register(self.statements())
+            if res.error:
+                return res
+            
+            if self.current_tok.type != TT_RBRACE:
+                return res.failure(Error(bracepos, self.current_tok.pos_end, 202, 'Braces'))
+            
+            res.register_advancement()
+            self.advance()
+            
+            if self.current_tok.type != TT_RPAREN:
+                return res.failure(Error(parenpos1, self.current_tok.pos_end, 202, 'Parenthesis'))
+            
+            res.register_advancement()
+            self.advance()
+            
+            return res.success(ClassDefNode(var_name_tok, atom))
         
     def funcexpr(self):
         res = ParseResult()
@@ -1938,6 +2005,163 @@ class BaseFunction:
         self.context = context
         return self
 
+class Class:
+    def __init__(self, name, body_node):
+        self.set_pos()
+        self.set_context()
+        self.name = name or '<anonymous>'
+        self.body_node = body_node
+        self.arg_names
+        self.built_in = ["type", "name"]
+        self.attributes = {}
+        
+    def attribute(self,child):
+        self.attributes = {"name": String(self.name), "type": String("Class")}
+        
+        hello = self.attributes.get(child.var_name_tok.value).set_pos(self.pos_start, self.pos_end).set_context(self.context)
+        if not hello:
+            return None, Error(child.pos_start, child.pos_end,
+                    311, child.var_name_tok.value, self.context
+                )
+        return hello,None
+        
+    def set_pos(self, pos_start=None, pos_end=None):
+        self.pos_start = pos_start
+        self.pos_end = pos_end
+        return self
+    
+    def copy(self):
+        copy = Function(self.name, self.body_node, self.arg_names, self.should_return_null)
+        copy.set_pos(self.pos_start, self.pos_end)
+        copy.set_context(self.context)
+        return copy
+        
+    def generate_new_context(self):
+        new_context = Context(self.name, self.context, self.pos_start)
+        new_context.symbol_table = SymbolTable(new_context.parent.symbol_table)
+        return new_context
+    
+    def check_args(self, arg_names, args):
+        res = RTResult()
+        if len(args) > len(arg_names):
+            return res.failure(Error(
+                self.pos_start, self.pos_end, 307,
+                f"{len(args) - len(arg_names)} into '{self.name}'",
+                self.context
+            ))
+        
+        if len(args) < len(arg_names):
+            return res.failure(Error(
+                self.pos_start, self.pos_end, 308,
+                f"{len(arg_names) - len(args)} into '{self.name}'",
+                self.context
+            ))
+        return res.success(None)
+    
+    def populate_args(self,arg_names, args, exec_ctx):
+        for i in range(len(args)):
+            arg_name = arg_names[i]
+            arg_value = args[i]
+            arg_value.set_context(exec_ctx)
+            exec_ctx.symbol_table.set_(arg_name, arg_value)
+            
+    def check_and_populate_args(self, arg_names, args, exec_ctx):
+        res = RTResult()
+        res.register(self.check_args(arg_names, args))
+        if res.should_return():
+            return res
+        self.populate_args(arg_names, args, exec_ctx)
+        return res.success(None)
+    
+    def added_to(self, other):
+        return None, Error(other.pos_start, other.pos_end,
+                    304, ["Function", other.type], self.context
+                )
+
+    def subbed_by(self, other):
+        return None, Error(other.pos_start, other.pos_end,
+                    304, ["Function", other.type], self.context
+                )
+
+    def multed_by(self, other):
+        return None, Error(other.pos_start, other.pos_end,
+                    304, ["Function", other.type], self.context
+                )
+
+    def dived_by(self, other):
+        return None, Error(other.pos_start, other.pos_end,
+                    304, ["Function", other.type], self.context
+                )
+        
+    def powed_by(self, other):
+        return None, Error(other.pos_start, other.pos_end,
+                    304, ["Function", other.type], self.context
+                )
+        
+    def equals(self, other):
+        return None, Error(other.pos_start, other.pos_end,
+                    304, ["Function", other.type], self.context
+                )
+    
+    def not_equals(self, other):
+        return None, Error(other.pos_start, other.pos_end,
+                    304, ["Function", other.type], self.context
+                )
+    
+    def less_than(self, other):
+        return None, Error(other.pos_start, other.pos_end,
+                    304, ["Function", other.type], self.context
+                )
+    
+    def greater_than(self, other):
+        return None, Error(other.pos_start, other.pos_end,
+                    304, ["Function", other.type], self.context
+                )
+    
+    def less_than_equals(self, other):
+        return None, Error(other.pos_start, other.pos_end,
+                    304, ["Function", other.type], self.context
+                )
+    
+    def greater_than_equals(self, other):
+        return None, Error(other.pos_start, other.pos_end,
+                    304, ["Function", other.type], self.context
+                )
+        
+    def piped(self, other):
+        return None, Error(other.pos_start, other.pos_end,
+                    304, ["Function", other.type], self.context
+                )
+        
+    def notted(self):
+        return None, Error(self.pos_start, self.pos_end, 304, ["not", "Function"], self.context)
+    
+    def anded(self, other):
+        return None, Error(self.pos_start, self.pos_end, 304, ["and", f"Function and {other.type}"], self.context)
+    
+    def ored(self,other):
+        return None, Error(self.pos_start, self.pos_end, 304, ["or", f"Function and {other.type}"], self.context)
+    
+    def set_context(self, context=None):
+        self.context = context
+        return self
+    def execute(self, args):
+        res = RTResult()
+        interpreter = Interpreter()
+        exec_ctx = self.generate_new_context()
+
+        res.register(self.check_and_populate_args(self.arg_names, args, exec_ctx))
+        if res.should_return():
+            return res
+
+        value = res.register(interpreter.visit(self.body_node, exec_ctx))
+        if res.should_return() and res.func_return_value == None: return res
+
+        ret_value = (value if not self.should_return_null else None) or res.func_return_value or NoneType()
+        return res.success(ret_value)
+    def __repr__(self):
+        return f"<class {self.name}>"
+
 class Function(BaseFunction):
     def __init__(self, name, body_node, arg_names, should_return_null):
         super().__init__(name)
@@ -2836,6 +3060,19 @@ class Interpreter:
         
         if node.var_name_tok:
             context.symbol_table.set_(func_name, func_value)
+            
+        return res.success(func_value)
+    
+    def visit_ClassDefNode(self, node, context):
+        res = RTResult()
+        burn = Context('Burn')
+        func_name = node.var_name_tok.value
+        body_node = res.register(self.visit(node.body_node, burn))
+        func_value = Class(func_name, body_node).set_context(context).set_pos(node.pos_start, node.pos_end)
+        
+        if func_name in PRESETSD:
+            return res.failure(Error(node.pos_start, node.pos_end, 305, func_name, context))
+        context.symbol_table.set_(func_name, func_value)
             
         return res.success(func_value)
     
