@@ -2153,17 +2153,47 @@ class Dictionary:
                 )
         
     def equals(self, other):
-        if self.value == other.value:
-            number = 1
+        number = 1
+        if self.type == other.type:
+            if len(self.value) == len(other.value):
+                for i in self.value:
+                    if isinstance(i, type(list(other.value)[list(self.value).index(i)])):
+                        if not i.value == list(other.value)[list(self.value).index(i)].value:
+                            number = 0
+                    else:
+                        number = 0
+                for i in self.value.values():
+                    if isinstance(i, type(list(other.value.values())[list(self.value.values()).index(i)])):
+                        if not i.value == list(other.value.values())[list(self.value.values()).index(i)].value:
+                            number = 0
+                    else:
+                        number = 0
+            else:
+                number = 0
         else:
             number = 0
         return Boolean(number).set_context(self.context), None
     
     def not_equals(self, other):
-        if self.value != other.value:
-            number = 1
+        number = 0
+        if self.type == other.type:
+            if len(self.value) == len(other.value):
+                for i in self.value:
+                    if isinstance(i, type(list(other.value)[list(self.value).index(i)])):
+                        if not i.value == list(other.value)[list(self.value).index(i)].value:
+                            number = 1
+                    else:
+                        number = 1
+                for i in self.value.values():
+                    if isinstance(i, type(list(other.value.values())[list(self.value.values()).index(i)])):
+                        if not i.value == list(other.value.values())[list(self.value.values()).index(i)].value:
+                            number = 1
+                    else:
+                        number = 1
+            else:
+                number = 1
         else:
-            number = 0
+            number = 1
         return Boolean(number).set_context(self.context), None
     
     def less_than(self, other):
