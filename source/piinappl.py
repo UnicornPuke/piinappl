@@ -6,7 +6,7 @@ if len(sys.argv) == 1:
         text = input("piinappl->>> ")
         if text.strip() == "":
             continue
-        result, error = run(text, 'fn')
+        result, error = run(text, '<shell>')
         
         if error: print(error.as_string())
         # elif result: 

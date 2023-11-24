@@ -1,5 +1,6 @@
 colorama==0.4.6
 Columnar==1.4.1
+getch==1.0
 string-color==1.2.3
 toolz==0.12.0
 wcwidth==0.2.10

@@ -5,7 +5,7 @@ import math
 
 DIGITS = '0123456789'
 LETTERSDIGITS = DIGITS + string.ascii_letters
-KEYWORDS = ['def', 'manip', 'and', 'or', 'not', 'if', 'elif', 'else', 'in', 'to', 'step', 'while', 'for', 'loop', 'func', 'return', 'continue', 'break']
+KEYWORDS = ['def', 'and', 'or', 'not', 'if', 'elif', 'else', 'in', 'to', 'step', 'while', 'for', 'loop', 'func', 'return', 'continue', 'break']
 TT_NUM = 'NUM'
 TT_FLOAT = 'FLOAT'
 TT_PLUS = 'PLUS'
@@ -61,7 +61,7 @@ class Error:
         if self.error_code == 302:
             self.error_name = "Symbol not defined"
         if self.error_code == 303:
-            self.error_name = "Symbol already defined"
+            self.error_name = "List must be length"
         if self.error_code == 304:
             self.error_name = f"Cannot operate {details[0]} with {details[1]}"
         if self.error_code == 305:
@@ -73,7 +73,7 @@ class Error:
         if self.error_code == 308:
             self.error_name = f"Too few arguments passed into"
         if self.error_code == 309:
-            self.error_name = f"Number out of list index range"
+            self.error_name = f"Item out of index range"
         if self.error_code == 310:
             self.error_name = f"Built-in function doesn't support type"
     def as_string(self):
@@ -505,6 +505,12 @@ class ListNode:
         self.pos_start = pos_start
         self.pos_end = pos_end
         
+class DictionaryNode:
+    def __init__(self, things, pos_start, pos_end):
+        self.things = things
+        self.pos_start = pos_start
+        self.pos_end = pos_end
+        
 class MultiLineNode:
     def __init__(self, things, pos_start, pos_end):
         self.things = things
@@ -582,6 +588,7 @@ class Parser:
     def advance(self):
         self.tok_idx += 1
         self.update_current_tok()
+        # print(self.current_tok)
         
     def update_current_tok(self): 
         if self.tok_idx < len(self.tokens):
@@ -598,7 +605,7 @@ class Parser:
             if res.error:
                 return res
             return res.success(UnaryOpNode(tok, factor))
-        elif tok.type in (TT_LSQUARE, TT_IDENTIFIER, TT_STRING, TT_NUM, TT_IDENTIFIER):
+        elif tok.type in (TT_LSQUARE, TT_IDENTIFIER, TT_STRING, TT_NUM, TT_IDENTIFIER, TT_LBRACE):
             listexpr = res.register(self.listcall())
             if res.error: return res
             return res.success(listexpr)
@@ -795,10 +802,105 @@ class Parser:
             if tok.value == "None":
                 return res.success(NoneTypeNode(tok))
             return res.success(VarAccessNode(tok))
+        elif tok.type == TT_LBRACE:
+            pos_s = self.current_tok.pos_start.copy()
+            res.register_advancement()
+            self.advance()
+            arg_nodes = {}
+            bracepos = self.current_tok.pos_start.copy()
+
+            if self.current_tok.type == TT_RBRACE:
+                pass
+            else:
+                if not self.current_tok.type == TT_LPAREN:
+                    return res.failure(Error(self.current_tok.pos_start, self.current_tok.pos_end, 201, '"("'))
+                res.register_advancement()
+                self.advance()
+                parenpos = self.current_tok.pos_start.copy()
+
+                arg_name = res.register(self.expr())
+                if res.error: 
+                    return res
+                
+                if not self.current_tok.type == TT_COMMA:
+                    return res.failure(Error(self.current_tok.pos_start, self.current_tok.pos_end, 201, '","'))
+                
+                res.register_advancement()
+                self.advance()
+                
+                arg_nodes[arg_name] = res.register(self.expr())
+                if res.error: 
+                    return res
+                
+                if not self.current_tok.type == TT_RPAREN:
+                    return res.failure(Error(parenpos, self.current_tok.pos_end, 201, 'Parenthesis'))
+                res.register_advancement()
+                self.advance()
+
+
+                while self.current_tok.type == TT_COMMA:
+                    res.register_advancement()
+                    self.advance()
+                    
+                    if not self.current_tok.type == TT_LPAREN:
+                        return res.failure(Error(self.current_tok.pos_start, self.current_tok.pos_end, 201, '"("'))
+                    res.register_advancement()
+                    self.advance()
+                    parenpos = self.current_tok.pos_start.copy()
+
+                    arg_name = res.register(self.expr())
+                    if res.error: 
+                        return res
+                    
+                    if not self.current_tok.type == TT_COMMA:
+                        return res.failure(Error(self.current_tok.pos_start, self.current_tok.pos_end, 201, '","'))
+                    
+                    res.register_advancement()
+                    self.advance()
+                    
+                    arg_nodes[arg_name] = res.register(self.expr())
+                    if res.error: 
+                        return res
+                    
+                    if not self.current_tok.type == TT_RPAREN:
+                        return res.failure(Error(parenpos, self.current_tok.pos_end, 201, 'Parenthesis'))
+                    res.register_advancement()
+                    self.advance()
+
+                if self.current_tok.type != TT_RBRACE:
+                    return res.failure(Error(bracepos, self.current_tok.pos_end, 202, 'Braces'))
+            pos_e = self.current_tok.pos_end.copy()
+            res.register_advancement()
+            self.advance()
+            return res.success(DictionaryNode(arg_nodes, pos_s, pos_e))
+        
+    def listr(self):
+        res = ParseResult()
+        tok = self.current_tok
+        res.register_advancement()
+        self.advance()
+        if tok.type == TT_IDENTIFIER:
+            return res.success(VarAccessNode(tok))
+        return res.failure(Error(self.current_tok.pos_start, self.current_tok.pos_end, 201, 'Identifier'))
         
     def listcall(self):
         res = ParseResult()
         left = res.register(self.listexpr())
+        if res.error:
+            return res
+        while self.current_tok.type == TT_PIPE:
+            op_tok = self.current_tok
+            res.register_advancement()
+            self.advance()
+            right = res.register(self.expr())
+            if res.error:
+                return res
+            left = BinOpNode(left, op_tok, right)
+        return res.success(left)
+    
+    def varcall(self):
+        res = ParseResult()
+        left = res.register(self.listr())
         if res.error:
             return res
         while self.current_tok.type == TT_PIPE:
@@ -1270,7 +1372,7 @@ class Parser:
     
     def varexpr(self):
         res = ParseResult()
-        if self.current_tok.matches(TT_KEYWORD, 'def') or self.current_tok.matches(TT_KEYWORD, 'manip'):
+        if self.current_tok.matches(TT_KEYWORD, 'def'):
             var_type = self.current_tok.value
             res.register_advancement()
             self.advance()
@@ -1288,13 +1390,11 @@ class Parser:
             self.advance()
             parenpos = self.current_tok.pos_start.copy()
             
-            if self.current_tok.type != TT_IDENTIFIER:
-                return res.failure(Error(self.current_tok.pos_start, self.current_tok.pos_end, 201, 'Identifier'))
-            
-            var_name = self.current_tok
-            res.register_advancement()
-            self.advance()
-            
+            var_name = res.register(self.varcall())
+            if res.error:
+                return res
+            # res.register_advancement()
+            # self.advance()
             
             if self.current_tok.type != TT_EQ:
                 return res.failure(Error(self.current_tok.pos_start, self.current_tok.pos_end, 201, '"="'))
@@ -1982,6 +2082,125 @@ class List:
     def __repr__(self):
         return str(self.value)
 
+class Dictionary:
+    def __init__(self, value):
+        self.set_pos()
+        self.set_context()
+        self.type = "Dictionary"
+        self.value = value
+        
+    def set_pos(self, pos_start=None, pos_end=None):
+        self.pos_start = pos_start
+        self.pos_end = pos_end
+        return self
+    
+    def copy(self):
+        copy = Dictionary(self.value)
+        copy.set_pos(self.pos_start, self.pos_end)
+        copy.set_context(self.context)
+        return copy
+    
+    def added_to(self, other):
+        if other.type == "Dictionary":
+            copy = self.copy()
+            copy.value.update(other.value)
+            return copy, None
+        if other.type == "List":
+            copy = self.copy()
+            if len(other.value)!= 2:
+                return None, Error(other.pos_start, other.pos_end,
+                    303, 2, self.context)
+            copy.value[other.value[0]] = other.value[1]
+            return copy, None
+        return None, Error(other.pos_start, other.pos_end,
+                    304, ["Dictionary", other.type], self.context
+                )
+
+    def subbed_by(self, other):
+        new_list = self.copy()
+        for i in list(new_list.value):
+            if isinstance(i, type(other)) and i.value == other.value:
+                del new_list.value[i]
+                return new_list, None
+        return None, Error(other.pos_start, other.pos_end, 309, other, self.context)
+
+    def multed_by(self, other):
+        return None, Error(other.pos_start, other.pos_end,
+                    304, ["Dictionary", other.type], self.context
+                )
+
+    def dived_by(self, other):
+        return None, Error(other.pos_start, other.pos_end,
+                    304, ["Dictionary", other.type], self.context
+                )
+        
+    def powed_by(self, other):
+        return None, Error(other.pos_start, other.pos_end,
+                    304, ["Dictionary", other.type], self.context
+                )
+        
+    def equals(self, other):
+        if self.value == other.value:
+            number = 1
+        else:
+            number = 0
+        return Boolean(number).set_context(self.context), None
+    
+    def not_equals(self, other):
+        if self.value != other.value:
+            number = 1
+        else:
+            number = 0
+        return Boolean(number).set_context(self.context), None
+    
+    def less_than(self, other):
+        return None, Error(other.pos_start, other.pos_end,
+                        304, ["Dictionary", other.type], self.context
+                    )
+    
+    def greater_than(self, other):
+        return None, Error(other.pos_start, other.pos_end,
+                        304, ["Dictionary", other.type], self.context
+                    )
+    
+    def less_than_equals(self, other):
+        return None, Error(other.pos_start, other.pos_end,
+                        304, ["Dictionary", other.type], self.context
+                    )
+    
+    def greater_than_equals(self, other):
+        return None, Error(other.pos_start, other.pos_end,
+                        304, ["Dictionary", other.type], self.context
+                    )
+    
+    def notted(self):
+        return None, Error(self.pos_start, self.pos_end, 304, ["not", "Dictionary"], self.context)
+    
+    def anded(self, other):
+        return None, Error(self.pos_start, self.pos_end, 304, ["and", f"Dictionary and {other.type}"], self.context)
+    
+    def ored(self,other):
+        return None, Error(self.pos_start, self.pos_end, 304, ["or", f"Dictionary and {other.type}"], self.context)
+    
+    def piped(self, other):
+        for i in list(self.value):
+            if isinstance(i, type(other)) and i.value == other.value:
+                return self.value.get(i), None
+    
+    def set_context(self, context=None):
+        self.context = context
+        return self
+        
+    def __repr__(self):
+        strings= "{"
+        leng = 0
+        for i in self.value:
+            leng += 1
+            strings += f"({i}, {self.value[i]})"
+            if not leng == len(self.value):
+                strings += ", "
+        strings += "}"
+        return strings
     
 class String:
     def __init__(self, value):
@@ -2004,7 +2223,7 @@ class String:
                     self.context
                 )
         return None, Error(other.pos_start, other.pos_end,
-                    304, ["List", other.type], self.context
+                    304, ["String", other.type], self.context
                 )
         
     def set_pos(self, pos_start=None, pos_end=None):
@@ -2241,24 +2460,39 @@ class Interpreter:
     
     def visit_VarAssignNode(self, node, context):
         res = RTResult()
-        var_name = node.var_name_tok.value
-        value = res.register(self.visit(node.value_node, context))
-        var_type = node.var_type
-        
-        if res.should_return():
-            return res
-        
-        if var_type == 'def':
-            if context.symbol_table.get(var_name):
-                return res.failure(Error(node.pos_start, node.pos_end, 303, var_name, context))
-            context.symbol_table.set_(var_name, value)
-        else:
-            if var_name in PRESETSV:
-                return res.failure(Error(node.pos_start, node.pos_end, 305, var_name, context))
-            if not context.symbol_table.get(var_name):
-                return res.failure(Error(node.pos_start, node.pos_end, 302, var_name, context))
-            context.symbol_table.set_(var_name, value)
+        if isinstance(node.var_name_tok, VarAccessNode):
+            var_name = node.var_name_tok.var_name_tok.value
             
+            value = res.register(self.visit(node.value_node, context))
+            var_type = node.var_type
+            
+            if res.should_return():
+                return res
+            
+            if var_type == 'def':
+                context.symbol_table.set_(var_name, value)
+        else:
+            var_name = res.register(self.visit(node.var_name_tok,context))
+            if res.should_return():
+                return res
+            lists = res.register(self.visit(node.var_name_tok.left_node,context))
+            rists = res.register(self.visit(node.var_name_tok.right_node,context))
+            value = res.register(self.visit(node.value_node, context))
+            if res.should_return():
+                return res
+            copy = lists.copy()
+            if isinstance(lists.copy(), List):
+                try:
+                    copy.value[rists.value] = value
+                except:
+                    return res.failure(Error(rists.pos_start, rists.pos_end, 309, rists.value, context))
+            if isinstance(lists.copy(), Dictionary):
+                try:
+                    for i in list(lists.value):
+                        if isinstance(i, type(rists)) and i.value == rists.value:
+                            copy.value[i] = value
+                except Exception as e:
+                    return res.failure(Error(rists.pos_start, rists.pos_end, 309, rists.value, context))
         return res.success(value)
     
     def visit_NumberNode(self, node, context):
@@ -2275,6 +2509,18 @@ class Interpreter:
 
         return res.success(
             List(elements).set_context(context).set_pos(node.pos_start, node.pos_end)
+        )
+        
+    def visit_DictionaryNode(self, node, context):
+        res = RTResult()
+        elements = {}
+
+        for element_node in node.things:
+            elements[(res.register(self.visit(element_node, context)))] = (res.register(self.visit(node.things[element_node], context)))
+            if res.should_return(): return res
+
+        return res.success(
+            Dictionary(elements).set_context(context).set_pos(node.pos_start, node.pos_end)
         )
         
     def visit_MultiLineNode(self, node, context):
@@ -2428,6 +2674,7 @@ class Interpreter:
         left = res.register(self.visit(node.left_node, context))
         if res.should_return(): return res
         right = res.register(self.visit(node.right_node, context))
+        self.left = left
         
         if res.should_return(): return res
         
