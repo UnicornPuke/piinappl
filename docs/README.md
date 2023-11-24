@@ -13,7 +13,7 @@ $ python source/piinappl.py example.appl
 
 If you put too many arguments, it will raise this:
 ```
-$ python source/piinappl.py example.appl extra_argument`
+$ python source/piinappl.py example.appl extra_argument
 Error code 001 - Unexpected amount of arguments: 3
 ```
 
