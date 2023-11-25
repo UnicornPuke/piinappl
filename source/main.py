@@ -1,7 +1,11 @@
-from stringcolor import *
+from stringcolor import cs
 from strings_with_arrows import *
 import string
 import math
+import random
+import time
+
+instancenums = []
 
 DIGITS = '0123456789'
 LETTERSDIGITS = DIGITS + string.ascii_letters
@@ -87,6 +91,8 @@ class Error:
             self.error_name = f"Couldn't find attribute"
         if self.error_code == 312:
             self.error_name = f"Can't edit attribute"
+        if self.error_code == 313:
+            self.error_name = f"Value type is not callable"
     def as_string(self):
         if self.error_code > 300:
             result = self.generate_traceback()
@@ -966,7 +972,37 @@ class Parser:
         res.register_advancement()
         self.advance()
         if tok.type == TT_IDENTIFIER:
-            return res.success(VarAccessNode(tok))
+            if self.current_tok.type != TT_LPAREN:
+                return res.success(VarAccessNode(tok))
+            if not self.current_tok.type == TT_LPAREN:
+                return res.failure(Error(self.current_tok.pos_start, self.current_tok.pos_end, 201, '"("'))
+            res.register_advancement()
+            self.advance()
+            arg_nodes = []
+            parenpos = self.current_tok.pos_start.copy()
+
+            if self.current_tok.type == TT_RPAREN:
+                res.register_advancement()
+                self.advance()
+            else:
+                arg_nodes.append(res.register(self.expr()))
+                if res.error:
+                    return res.failure(Error(self.current_tok.pos_start, self.current_tok.pos_end, 201, 'Expression, Number, or ")"'))
+
+                while self.current_tok.type == TT_COMMA:
+                    res.register_advancement()
+                    self.advance()
+
+                    arg_nodes.append(res.register(self.expr()))
+                    if res.error: return res
+
+                if self.current_tok.type != TT_RPAREN:
+                    return res.failure(Error(parenpos, self.current_tok.pos_end, 202, 'Parenthesis'))
+
+                res.register_advancement()
+                self.advance()
+            return res.success(CallNode(VarAccessNode(tok), arg_nodes))
+            
         return res.failure(Error(self.current_tok.pos_start, self.current_tok.pos_end, 201, 'Identifier'))
         
     def listcall(self):
@@ -982,14 +1018,6 @@ class Parser:
             if res.error:
                 return res
             left = BinOpNode(left, op_tok, right)
-        while self.current_tok.type == TT_POINT:
-            op_tok = self.current_tok
-            res.register_advancement()
-            self.advance()
-            right = res.register(self.listexpr())
-            if res.error:
-                return res
-            left = AttributeNode(left, right)
         return res.success(left)
     
     def varcall(self):
@@ -1340,9 +1368,24 @@ class Parser:
             self.advance()
             
             return res.success(LoopNode(amount, expr))
+
+    def doinky(self):
+        res = ParseResult()
+        left = res.register(self.call())
+        if res.error:
+            return res
+        while self.current_tok.type == TT_POINT:
+            op_tok = self.current_tok
+            res.register_advancement()
+            self.advance()
+            right = res.register(self.call())
+            if res.error:
+                return res
+            left = AttributeNode(left, right)
+        return res.success(left)
     
     def power(self):
-        return self.bin_op(self.call, [TT_POWER])
+        return self.bin_op(self.doinky, [TT_POWER])
     
     def term(self):
         return self.bin_op(self.power, [TT_MUL, TT_DIV])
@@ -1630,12 +1673,19 @@ class Number:
         else:
             length = len(str(self.value))
         self.attributes = {"type": String("Number"), "length": Number(length)}
-        hello = self.attributes.get(child.var_name_tok.value).set_pos(self.pos_start, self.pos_end).set_context(self.context)
+        if not isinstance(child, CallNode):
+            hello = self.attributes.get(child.var_name_tok.value).set_pos(self.pos_start, self.pos_end).set_context(self.context)
+        else:
+            hello = self.attributes.get(child.node_to_call.var_name_tok.value)
         if not hello:
+            if not isinstance(child, CallNode):
+                return None, Error(child.pos_start, child.pos_end,
+                        311, child.var_name_tok.value, self.context
+                    )
             return None, Error(child.pos_start, child.pos_end,
-                    311, child.var_name_tok.value, self.context
-                )
-        return hello,None
+                        311, child.node_to_call.var_name_tok.value, self.context
+                    )
+        return hello.set_pos(self.pos_start, self.pos_end).set_context(self.context),None
         
     def set_pos(self, pos_start=None, pos_end=None):
         self.pos_start = pos_start
@@ -1934,66 +1984,66 @@ class BaseFunction:
     
     def added_to(self, other):
         return None, Error(other.pos_start, other.pos_end,
-                    304, ["Function", other.type], self.context
+                    304, [self.type, other.type], self.context
                 )
 
     def subbed_by(self, other):
         return None, Error(other.pos_start, other.pos_end,
-                    304, ["Function", other.type], self.context
+                    304, [self.type, other.type], self.context
                 )
 
     def multed_by(self, other):
         return None, Error(other.pos_start, other.pos_end,
-                    304, ["Function", other.type], self.context
+                    304, [self.type, other.type], self.context
                 )
 
     def dived_by(self, other):
         return None, Error(other.pos_start, other.pos_end,
-                    304, ["Function", other.type], self.context
+                    304, [self.type, other.type], self.context
                 )
         
     def powed_by(self, other):
         return None, Error(other.pos_start, other.pos_end,
-                    304, ["Function", other.type], self.context
+                    304, [self.type, other.type], self.context
                 )
         
     def equals(self, other):
         return None, Error(other.pos_start, other.pos_end,
-                    304, ["Function", other.type], self.context
+                    304, [self.type, other.type], self.context
                 )
     
     def not_equals(self, other):
         return None, Error(other.pos_start, other.pos_end,
-                    304, ["Function", other.type], self.context
+                    304, [self.type, other.type], self.context
                 )
     
     def less_than(self, other):
         return None, Error(other.pos_start, other.pos_end,
-                    304, ["Function", other.type], self.context
+                    304, [self.type, other.type], self.context
                 )
     
     def greater_than(self, other):
         return None, Error(other.pos_start, other.pos_end,
-                    304, ["Function", other.type], self.context
+                    304, [self.type, other.type], self.context
                 )
     
     def less_than_equals(self, other):
         return None, Error(other.pos_start, other.pos_end,
-                    304, ["Function", other.type], self.context
+                    304, [self.type, other.type], self.context
                 )
     
     def greater_than_equals(self, other):
         return None, Error(other.pos_start, other.pos_end,
-                    304, ["Function", other.type], self.context
+                    304, [self.type, other.type], self.context
                 )
         
     def piped(self, other):
         return None, Error(other.pos_start, other.pos_end,
-                    304, ["Function", other.type], self.context
+                    304, [self.type, other.type], self.context
                 )
         
     def notted(self):
-        return None, Error(self.pos_start, self.pos_end, 304, ["not", "Function"], self.context)
+        return None, Error(self.pos_start, self.pos_end, 304, ["not", self.type], self.context)
     
     def anded(self, other):
         return None, Error(self.pos_start, self.pos_end, 304, ["and", f"Function and {other.type}"], self.context)
@@ -2011,18 +2061,27 @@ class Class:
         self.set_context()
         self.name = name or '<anonymous>'
         self.body_node = body_node
-        self.arg_names
+        self.arg_names = []
         self.built_in = ["type", "name"]
         self.attributes = {}
+        self.extras = {}
+        self.type = "Class Object"
         
     def attribute(self,child):
-        self.attributes = {"name": String(self.name), "type": String("Class")}
-        
-        hello = self.attributes.get(child.var_name_tok.value).set_pos(self.pos_start, self.pos_end).set_context(self.context)
+        self.attributes = {"name": String(self.name), "type": String("Class Object")}
+        if isinstance(child, VarAccessNode):
+            hello = self.attributes.get(child.var_name_tok.value)
+        else:
+            hello = self.attributes.get(child.node_to_call.var_name_tok.value)
         if not hello:
+            if isinstance(child, VarAccessNode):
+                return None, Error(child.pos_start, child.pos_end,
+                        311, child.var_name_tok.value, self.context
+                    )
             return None, Error(child.pos_start, child.pos_end,
-                    311, child.var_name_tok.value, self.context
-                )
+                        311, child.node_to_call.var_name_tok.value, self.context
+                    )
+        hello.set_pos(self.pos_start, self.pos_end).set_context(self.context)
         return hello,None
         
     def set_pos(self, pos_start=None, pos_end=None):
@@ -2031,9 +2090,28 @@ class Class:
         return self
     
     def copy(self):
-        copy = Function(self.name, self.body_node, self.arg_names, self.should_return_null)
+        copy = Class(self.name, self.body_node)
         copy.set_pos(self.pos_start, self.pos_end)
         copy.set_context(self.context)
+        copy.attributes = self.attributes
+        while True:
+            copy.instance_number = random.randint(0, 100000)
+            if copy.instance_number not in instancenums:
+                break
+        instancenums.append(copy.instance_number)
+        return copy
+
+    def instance(self):
+        copy = ClassInstance(self.name, self.body_node)
+        copy.set_pos(self.pos_start, self.pos_end)
+        copy.set_context(self.context)
+        copy.extras = self.extras
+        copy.attributes = self.attributes
+        while True:
+            copy.instance_number = random.randint(0, 100000)
+            if copy.instance_number not in instancenums:
+                break
+        instancenums.append(copy.instance_number)
         return copy
         
     def generate_new_context(self):
@@ -2075,72 +2153,72 @@ class Class:
     
     def added_to(self, other):
         return None, Error(other.pos_start, other.pos_end,
-                    304, ["Function", other.type], self.context
+                    304, [self.type, other.type], self.context
                 )
 
     def subbed_by(self, other):
         return None, Error(other.pos_start, other.pos_end,
-                    304, ["Function", other.type], self.context
+                    304, [self.type, other.type], self.context
                 )
 
     def multed_by(self, other):
         return None, Error(other.pos_start, other.pos_end,
-                    304, ["Function", other.type], self.context
+                    304, [self.type, other.type], self.context
                 )
 
     def dived_by(self, other):
         return None, Error(other.pos_start, other.pos_end,
-                    304, ["Function", other.type], self.context
+                    304, [self.type, other.type], self.context
                 )
         
     def powed_by(self, other):
         return None, Error(other.pos_start, other.pos_end,
-                    304, ["Function", other.type], self.context
+                    304, [self.type, other.type], self.context
                 )
         
     def equals(self, other):
         return None, Error(other.pos_start, other.pos_end,
-                    304, ["Function", other.type], self.context
+                    304, [self.type, other.type], self.context
                 )
     
     def not_equals(self, other):
         return None, Error(other.pos_start, other.pos_end,
-                    304, ["Function", other.type], self.context
+                    304, [self.type, other.type], self.context
                 )
     
     def less_than(self, other):
         return None, Error(other.pos_start, other.pos_end,
-                    304, ["Function", other.type], self.context
+                    304, [self.type, other.type], self.context
                 )
     
     def greater_than(self, other):
         return None, Error(other.pos_start, other.pos_end,
-                    304, ["Function", other.type], self.context
+                    304, [self.type, other.type], self.context
                 )
     
     def less_than_equals(self, other):
         return None, Error(other.pos_start, other.pos_end,
-                    304, ["Function", other.type], self.context
+                    304, [self.type, other.type], self.context
                 )
     
     def greater_than_equals(self, other):
         return None, Error(other.pos_start, other.pos_end,
-                    304, ["Function", other.type], self.context
+                    304, [self.type, other.type], self.context
                 )
         
     def piped(self, other):
         return None, Error(other.pos_start, other.pos_end,
-                    304, ["Function", other.type], self.context
+                    304, [self.type, other.type], self.context
                 )
         
     def notted(self):
-        return None, Error(self.pos_start, self.pos_end, 304, ["not", "Function"], self.context)
+        return None, Error(self.pos_start, self.pos_end, 304, ["not", self.type], self.context)
     
     def anded(self, other):
-        return None, Error(self.pos_start, self.pos_end, 304, ["and", f"Function and {other.type}"], self.context)
+        return None, Error(self.pos_start, self.pos_end, 304, ["and", f"Class and {other.type}"], self.context)
     
     def ored(self,other):
-        return None, Error(self.pos_start, self.pos_end, 304, ["or", f"Function and {other.type}"], self.context)
+        return None, Error(self.pos_start, self.pos_end, 304, ["or", f"Class and {other.type}"], self.context)
     
     def set_context(self, context=None):
         self.context = context
@@ -2150,17 +2228,68 @@ class Class:
         interpreter = Interpreter()
         exec_ctx = self.generate_new_context()
 
+        body_node = MultiLineNode([], self.pos_start, self.pos_end)
+
+        for i in self.body_node.value:
+            if isinstance(i, Function):
+                if i.name == "_init":
+                    self.arg_names = i.arg_names
+                    body_node = i.body_node
+        if "self" in self.arg_names:
+            args.append(self.instance())
         res.register(self.check_and_populate_args(self.arg_names, args, exec_ctx))
         if res.should_return():
             return res
 
-        value = res.register(interpreter.visit(self.body_node, exec_ctx))
+        value = res.register(interpreter.visit(body_node, exec_ctx))
         if res.should_return() and res.func_return_value == None: return res
-
-        ret_value = (value if not self.should_return_null else None) or res.func_return_value or NoneType()
-        return res.success(ret_value)
+        return res.success(self.instance())
     def __repr__(self):
-        return f"<class {self.name}>"
+        return f"<class-object {self.name}>"
+
+class ClassInstance(Class):
+    def __init__(self, name, body_node):
+        self.set_pos()
+        self.set_context()
+        self.name = name or '<anonymous>'
+        self.body_node = body_node
+        self.arg_names = []
+        self.built_in = ["type", "name"]
+        self.attributes = {}
+        self.type = "Class Instance"
+
+    def copy(self):
+        copy = ClassInstance(self.name, self.body_node)
+        copy.set_pos(self.pos_start, self.pos_end)
+        copy.set_context(self.context)
+        copy.extras = self.extras
+        copy.attributes = self.attributes
+        copy.instance_number = self.instance_number
+        return copy
+
+    def attribute(self,child):
+        self.attributes = {"name": String(self.name), "type": String("Class Instance")}
+        for i in self.body_node.value:
+            if isinstance(i, Function):
+                self.extras[i.name] = i
+        self.attributes.update(self.extras)
+        if isinstance(child, CallNode):
+            hello = self.attributes.get(child.node_to_call.var_name_tok.value)
+            if not hello or hello == None:
+                return None, Error(child.pos_start, child.pos_end,
+                        311, child.node_to_call.var_name_tok.value, self.context
+                    )
+        else:
+            hello = self.attributes.get(child.var_name_tok.value)
+            if not hello or hello == None:
+                return None, Error(child.pos_start, child.pos_end,
+                        311, child.var_name_tok.value, self.context
+                    )
+        hello = hello.set_pos(self.pos_start, self.pos_end).set_context(self.context)
+        return hello,None
+    
+    def __repr__(self):
+        return f"<class-instance {self.name} at 0x{self.instance_number}>"
 
 class Function(BaseFunction):
     def __init__(self, name, body_node, arg_names, should_return_null):
@@ -2827,8 +2956,9 @@ class Interpreter:
     def visit_CallNode(self, node, context):
         res = RTResult()
         args = []
-        
         value_to_call = res.register(self.visit(node.node_to_call, context))
+        if isinstance(value_to_call, ClassInstance):
+            return res.failure(Error(value_to_call.pos_start, value_to_call.pos_end, 313, "Class Instance", context))
         if res.should_return(): return res
         value_to_call.value = value_to_call.copy().set_pos(node.pos_start, node.pos_end)
         
@@ -2880,14 +3010,21 @@ class Interpreter:
             var_name = res.register(self.visit(node.var_name_tok.parent,context))
             if res.should_return():
                 return res
+            value_node = res.register(self.visit(node.value_node,context))
             child = node.var_name_tok.child.var_name_tok.value
             if res.should_return():
                 return res
             copy = var_name.copy()
-            if isinstance(var_name.copy(), Parser):
-                pass
+            if isinstance(copy, ClassInstance):
+                copy.extras[child] = value_node
+                value = None
             else:
-                return res.failure(Error(node.var_name_tok.pos_start, node.var_name_tok.pos_end, 312, f'{node.var_name_tok.parent.var_name_tok.value}.{node.var_name_tok.child.var_name_tok.value}', context))
+                if isinstance(node.var_name_tok.parent, VarAccessNode):
+                    call = res.register(self.visit(node.var_name_tok.parent,context))
+                    return res.failure(Error(node.var_name_tok.pos_start, node.var_name_tok.pos_end, 312, f'{call.type}.{node.var_name_tok.child.var_name_tok.value}', context))
+                else:
+                    call = res.register(self.visit(node.var_name_tok.parent,context))
+                    return res.failure(Error(node.var_name_tok.pos_start, node.var_name_tok.pos_end, 312, f'{call.type}.{node.var_name_tok.child.var_name_tok.value}', context))
         return res.success(value)
     
     def visit_NumberNode(self, node, context):
@@ -3065,7 +3202,8 @@ class Interpreter:
     
     def visit_ClassDefNode(self, node, context):
         res = RTResult()
-        burn = Context('Burn')
+        burn = Context(node.var_name_tok.value)
+        burn.symbol_table = SymbolTable(context.symbol_table)
         func_name = node.var_name_tok.value
         body_node = res.register(self.visit(node.body_node, burn))
         func_value = Class(func_name, body_node).set_context(context).set_pos(node.pos_start, node.pos_end)
@@ -3082,11 +3220,26 @@ class Interpreter:
         if res.should_return(): return res
         
         result, error = left.attribute(node.child)
+        if result:
+            result.set_pos(node.child.pos_start, node.child.pos_end).set_context(context)
         
         if error:
             return res.failure(error)
         else:
-            return res.success(result.set_context(context).set_pos(node.pos_start, node.pos_end))
+            if isinstance(node.child, CallNode):
+                args = []
+                for arg_node in node.child.arg_nodes:
+                    args.append(res.register(self.visit(arg_node, context)))
+                    if res.should_return(): return res
+
+                for i in result.arg_names:
+                    if i == "self":
+                        args.insert(0, left.copy())
+
+                result = res.register(result.execute(args))
+                if res.should_return(): return res
+                result = result.copy().set_pos(node.child.pos_start, node.child.pos_end).set_context(context)
+            return res.success(result.set_context(context).set_pos(node.child.pos_start, node.child.pos_end))
         
     def visit_BinOpNode(self, node, context):
         res = RTResult()
