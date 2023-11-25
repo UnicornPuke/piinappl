@@ -13,3 +13,4 @@
 - 2 new built-in functions
     - print
     - factorial
+- Overall basic documentation
