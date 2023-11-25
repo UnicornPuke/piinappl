@@ -39,12 +39,13 @@ TT_RSQUARE = "RSQUARE"
 TT_PIPE = "PIPE"
 TT_NEWLINE = "NEWLINE"
 TT_POINT = "POINT"
-# TT_MODULO = "MODULO"
-# TT_PLUSEQ = "PLUSEQ"
-# TT_MINUSEQ = "MINUSEQ"
-# TT_MULEQ = "MULEQ"
-# TT_DIVEQ = "DIVEQ"
-# TT_MODULOEQ = "MODULOEQ"
+TT_MODULO = "MODULO"
+TT_PLUSEQ = "PLUSEQ"
+TT_MINUSEQ = "MINUSEQ"
+TT_MULEQ = "MULEQ"
+TT_DIVEQ = "DIVEQ"
+TT_POWEREQ = "POWEREQ"
+TT_MODULOEQ = "MODULOEQ"
 
 class Error:
     def __init__(self, pos_start, pos_end, error_code, details, context=None):
@@ -210,17 +211,15 @@ class Lexer:
             elif self.current_char == '#':
                 self.skip_comment()
             elif self.current_char == "+":
-                tokens.append(Token(TT_PLUS, pos_start=self.pos, pos_end=self.pos))
-                self.advance()
+                tokens.append(self.make_operator(TT_PLUS))
             elif self.current_char == "-":
-                tokens.append(Token(TT_MINUS,pos_start=self.pos, pos_end=self.pos))
-                self.advance()
+                tokens.append(self.make_operator(TT_MINUS))
             elif self.current_char == "*":
-                tokens.append(Token(TT_MUL,pos_start=self.pos, pos_end=self.pos))
-                self.advance()
+                tokens.append(self.make_operator(TT_MUL))
             elif self.current_char == "/":
-                tokens.append(Token(TT_DIV,pos_start=self.pos, pos_end=self.pos))
-                self.advance()
+                tokens.append(self.make_operator(TT_DIV))
+            elif self.current_char == "%":
+                tokens.append(self.make_operator(TT_MODULO))
             elif self.current_char == ":":
                 tokens.append(Token(TT_COLON,pos_start=self.pos, pos_end=self.pos))
                 self.advance()
@@ -246,8 +245,7 @@ class Lexer:
                 tokens.append(Token(TT_RSQUARE,pos_start=self.pos, pos_end=self.pos))
                 self.advance()
             elif self.current_char == "^":
-                tokens.append(Token(TT_POWER,pos_start=self.pos, pos_end=self.pos))
-                self.advance()
+                tokens.append(self.make_operator(TT_POWER))
             elif self.current_char == ",":
                 tokens.append(Token(TT_COMMA,pos_start=self.pos, pos_end=self.pos))
                 self.advance()
@@ -369,6 +367,18 @@ class Lexer:
             
         return Token(tok_type, pos_start=pos_start, pos_end=self.pos)
     
+    def make_operator(self, tok):
+        tok_type = tok
+        pos_start = self.pos.copy()
+        self.advance()
+
+        
+        if self.current_char == '=':
+            self.advance()
+            tok_type = tok + "EQ"
+            
+        return Token(tok_type, pos_start=pos_start, pos_end=self.pos)
+    
     def make_less_than(self):
         tok_type = TT_LT
         pos_start = self.pos.copy()
@@ -407,10 +417,11 @@ class IfNode:
         self.pos_end = (self.elsecase or self.cases[len(self.cases) - 1][0]).pos_end
         
 class VarAssignNode:
-    def __init__(self, var_name_tok, value_node, var_type):
+    def __init__(self, var_name_tok, value_node, var_type, op_tok):
         self.var_name_tok = var_name_tok
         self.value_node = value_node
         self.var_type = var_type
+        self.op_tok = op_tok
         
         self.pos_start = self.var_name_tok.pos_start
         self.pos_end = self.value_node.pos_end
@@ -969,9 +980,9 @@ class Parser:
     def listr(self):
         res = ParseResult()
         tok = self.current_tok
-        res.register_advancement()
-        self.advance()
         if tok.type == TT_IDENTIFIER:
+            res.register_advancement()
+            self.advance()
             if self.current_tok.type != TT_LPAREN:
                 return res.success(VarAccessNode(tok))
             if not self.current_tok.type == TT_LPAREN:
@@ -1002,7 +1013,17 @@ class Parser:
                 res.register_advancement()
                 self.advance()
             return res.success(CallNode(VarAccessNode(tok), arg_nodes))
-            
+        elif tok.type == TT_LPAREN:
+            pos_startt = self.current_tok.pos_start.copy()
+            res.register_advancement()
+            self.advance()
+            expr = res.register(self.varcall())
+            if res.error: return res
+            if self.current_tok.type == TT_RPAREN:
+                res.register_advancement()
+                self.advance()
+                return res.success(expr)
+            return res.failure(Error(pos_startt, self.current_tok.pos_end, 202, "Parenthesis"))    
         return res.failure(Error(self.current_tok.pos_start, self.current_tok.pos_end, 201, 'Identifier'))
         
     def listcall(self):
@@ -1388,7 +1409,7 @@ class Parser:
         return self.bin_op(self.doinky, [TT_POWER])
     
     def term(self):
-        return self.bin_op(self.power, [TT_MUL, TT_DIV])
+        return self.bin_op(self.power, [TT_MUL, TT_DIV, TT_MODULO])
     
     def ifexpr(self):
         res = ParseResult()
@@ -1541,8 +1562,9 @@ class Parser:
             # res.register_advancement()
             # self.advance()
             
-            if self.current_tok.type != TT_EQ:
+            if self.current_tok.type not in (TT_EQ, TT_PLUSEQ, TT_DIVEQ, TT_MODULOEQ, TT_MINUSEQ, TT_DIVEQ):
                 return res.failure(Error(self.current_tok.pos_start, self.current_tok.pos_end, 201, '"="'))
+            op_tok = self.current_tok
             
             res.register_advancement()
             self.advance()
@@ -1556,7 +1578,7 @@ class Parser:
             res.register_advancement()
             self.advance()
             
-            return res.success(VarAssignNode(var_name, expr, var_type))
+            return res.success(VarAssignNode(var_name, expr, var_type, op_tok))
     
     def expr(self):
         res = ParseResult()
@@ -1712,6 +1734,13 @@ class Number:
         return None, Error(other.pos_start, other.pos_end,
                     304, ["Number", other.type], self.context
                 )
+    
+    def modulo(self, other):
+        if other.type == "Number":
+            return Number(self.value % other.value).set_context(self.context), None
+        return None, Error(other.pos_start, other.pos_end,
+                    304, ["Number", other.type], self.context
+                )
 
     def dived_by(self, other):
         if other.type == "Number":
@@ -1779,10 +1808,10 @@ class Number:
         return None, Error(self.pos_start, self.pos_end, 304, ["not", "Number"], self.context)
     
     def anded(self, other):
-        return None, Error(self.pos_start, self.pos_end, 304, ["and", f"None and {other.type}"], self.context)
+        return None, Error(self.pos_start, self.pos_end, 304, ["and", f"Number and {other.type}"], self.context)
     
     def ored(self,other):
-        return None, Error(self.pos_start, self.pos_end, 304, ["or", f"None and {other.type}"], self.context)
+        return None, Error(self.pos_start, self.pos_end, 304, ["or", f"Number and {other.type}"], self.context)
     
     def piped(self, other):
         return None, Error(other.pos_start, other.pos_end,
@@ -1855,6 +1884,11 @@ class Boolean:
         return None, Error(other.pos_start, other.pos_end,
                     304, ["Boolean", other.type], self.context
                 )
+
+    def modulo(self, other):
+        return None, Error(other.pos_start, other.pos_end,
+                        304, [self.type, other.type], self.context
+                    )
         
     def equals(self, other):
         if self.value == other.value:
@@ -2041,6 +2075,11 @@ class BaseFunction:
         return None, Error(other.pos_start, other.pos_end,
                     304, [self.type, other.type], self.context
                 )
+
+    def modulo(self, other):
+        return None, Error(other.pos_start, other.pos_end,
+                        304, [self.type, other.type], self.context
+                    )
         
     def notted(self):
         return None, Error(self.pos_start, self.pos_end, 304, ["not", self.type], self.context)
@@ -2219,6 +2258,11 @@ class Class:
     
     def ored(self,other):
         return None, Error(self.pos_start, self.pos_end, 304, ["or", f"Class and {other.type}"], self.context)
+
+    def modulo(self, other):
+        return None, Error(other.pos_start, other.pos_end,
+                        304, [self.type, other.type], self.context
+                    )
     
     def set_context(self, context=None):
         self.context = context
@@ -2510,6 +2554,11 @@ class List:
     def ored(self,other):
         return None, Error(self.pos_start, self.pos_end, 304, ["or", f"List and {other.type}"], self.context)
     
+    def modulo(self, other):
+        return None, Error(other.pos_start, other.pos_end,
+                        304, [self.type, other.type], self.context
+                    )
+    
     def piped(self, other):
         if other.type == "Number":
             try:
@@ -2676,6 +2725,14 @@ class Dictionary:
         for i in list(self.value):
             if isinstance(i, type(other)) and i.value == other.value:
                 return self.value.get(i), None
+        return None,  Error(other.pos_start, other.pos_end,
+                309, other.value, self.context
+            )
+            
+    def modulo(self, other):
+        return None, Error(other.pos_start, other.pos_end,
+                        304, [self.type, other.type], self.context
+                    )
     
     def set_context(self, context=None):
         self.context = context
@@ -2800,6 +2857,11 @@ class String:
         return None, Error(other.pos_start, other.pos_end,
                         304, ["String", other.type], self.context
                     )
+
+    def modulo(self, other):
+        return None, Error(other.pos_start, other.pos_end,
+                        304, [self.type, other.type], self.context
+                    )
     
     def notted(self):
         return None, Error(self.pos_start, self.pos_end, 304, ["not", "String"], self.context)
@@ -2904,6 +2966,11 @@ class NoneType:
         return None, Error(other.pos_start, other.pos_end,
                         304, ["None", other.type], self.context
                     )
+
+    def modulo(self, other):
+        return None, Error(other.pos_start, other.pos_end,
+                        304, [self.type, other.type], self.context
+                    )
     
     def notted(self):
         return None, Error(self.pos_start, self.pos_end, 304, ["not", "None"], self.context)
@@ -2977,13 +3044,32 @@ class Interpreter:
             var_name = node.var_name_tok.var_name_tok.value
             
             value = res.register(self.visit(node.value_node, context))
-            var_type = node.var_type
             
             if res.should_return():
                 return res
-            
-            if var_type == 'def':
+            if node.op_tok.type == TT_EQ:
                 context.symbol_table.set_(var_name, value)
+            else:
+                left = res.register(self.visit(VarAccessNode(node.var_name_tok.var_name_tok), context))
+                if res.error:
+                    return res
+                right = value
+                if node.op_tok.type == TT_PLUSEQ:
+                    result,error = left.added_to(right)
+                elif node.op_tok.type == TT_MINUSEQ:
+                    result,error = left.subbed_by(right)
+                elif node.op_tok.type == TT_DIVEQ:
+                    result,error = left.dived_by(right)
+                elif node.op_tok.type == TT_MULEQ:
+                    result,error= left.multed_by(right)
+                elif node.op_tok.type == TT_POWEREQ:
+                    result,error= left.powed_by(right)
+                elif node.op_tok.type == TT_MODULOEQ:
+                    result,error= left.modulo(right)
+                if error:
+                    return res.failure(error)
+                context.symbol_table.set_(var_name, result)
+                value = result
         elif isinstance(node.var_name_tok, BinOpNode):
             var_name = res.register(self.visit(node.var_name_tok,context))
             if res.should_return():
@@ -2996,27 +3082,92 @@ class Interpreter:
             copy = lists.copy()
             if isinstance(lists.copy(), List):
                 try:
-                    copy.value[rists.value] = value
-                except:
+                    left= copy.value[rists.value]
+                    right = value
+                    if node.op_tok.type == TT_EQ:
+                        copy.value[rists.value] = value
+                        error = None
+                        result = None
+                    elif node.op_tok.type == TT_PLUSEQ:
+                        result,error = left.added_to(right)
+                    elif node.op_tok.type == TT_MINUSEQ:
+                        result,error = left.subbed_by(right)
+                    elif node.op_tok.type == TT_DIVEQ:
+                        result,error = left.dived_by(right)
+                    elif node.op_tok.type == TT_MULEQ:
+                        result,error= left.multed_by(right)
+                    elif node.op_tok.type == TT_POWEREQ:
+                        result,error= left.powed_by(right)
+                    elif node.op_tok.type == TT_MODULOEQ:
+                        result,error= left.modulo(right)
+                    if error:
+                        return res.failure(error)
+                    if result:
+                        copy.value[rists.value] = result
+                except Exception as e:
                     return res.failure(Error(rists.pos_start, rists.pos_end, 309, rists.value, context))
             if isinstance(lists.copy(), Dictionary):
                 try:
                     for i in list(lists.value):
                         if isinstance(i, type(rists)) and i.value == rists.value:
-                            copy.value[i] = value
+                            if node.op_tok.type == TT_EQ:
+                                copy.value[i] = value
+                                error = None
+                                result = None
+                            elif node.op_tok.type == TT_PLUSEQ:
+                                result,error = left.added_to(right)
+                            elif node.op_tok.type == TT_MINUSEQ:
+                                result,error = left.subbed_by(right)
+                            elif node.op_tok.type == TT_DIVEQ:
+                                result,error = left.dived_by(right)
+                            elif node.op_tok.type == TT_MULEQ:
+                                result,error= left.multed_by(right)
+                            elif node.op_tok.type == TT_POWEREQ:
+                                result,error= left.powed_by(right)
+                            elif node.op_tok.type == TT_MODULOEQ:
+                                result,error= left.modulo(right)
+                            if error:
+                                return res.failure(error)
+                            if result:
+                                copy.value[i] = result
                 except Exception as e:
                     return res.failure(Error(rists.pos_start, rists.pos_end, 309, rists.value, context))
+            value = None
         else:
-            var_name = res.register(self.visit(node.var_name_tok.parent,context))
+            if node.op_tok.type == TT_EQ:
+                var_name = res.register(self.visit(node.var_name_tok.parent,context))
+            else:
+                var_name = res.register(self.visit(node.var_name_tok,context))
             if res.should_return():
                 return res
             value_node = res.register(self.visit(node.value_node,context))
             child = node.var_name_tok.child.var_name_tok.value
             if res.should_return():
                 return res
-            copy = var_name.copy()
+            copy = res.register(self.visit(node.var_name_tok.parent,context)).copy()
             if isinstance(copy, ClassInstance):
-                copy.extras[child] = value_node
+                left= var_name
+                right = value_node
+                if node.op_tok.type == TT_EQ:
+                    copy.extras[child] = value_node
+                    error = None
+                    result = None
+                elif node.op_tok.type == TT_PLUSEQ:
+                    result,error = left.added_to(right)
+                elif node.op_tok.type == TT_MINUSEQ:
+                    result,error = left.subbed_by(right)
+                elif node.op_tok.type == TT_DIVEQ:
+                    result,error = left.dived_by(right)
+                elif node.op_tok.type == TT_MULEQ:
+                    result,error= left.multed_by(right)
+                elif node.op_tok.type == TT_POWEREQ:
+                    result,error= left.powed_by(right)
+                elif node.op_tok.type == TT_MODULOEQ:
+                    result,error= left.modulo(right)
+                if error:
+                    return res.failure(error)
+                if result:
+                    copy.extras[child] = result
                 value = None
             else:
                 if isinstance(node.var_name_tok.parent, VarAccessNode):
@@ -3271,6 +3422,8 @@ class Interpreter:
             result,error= left.greater_than_equals(right)
         elif node.op_tok.type == TT_LTE:
             result,error= left.less_than_equals(right)
+        elif node.op_tok.type == TT_MODULO:
+            result,error= left.modulo(right)
         elif node.op_tok.type == TT_PIPE:
             result,error= left.piped(right)
         elif node.op_tok.matches(TT_KEYWORD, 'or'):
