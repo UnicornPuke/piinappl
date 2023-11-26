@@ -1,5 +1,8 @@
 # README
-To use, download the latest release from GitHub, the dependencies should automatically download.
+To use, download the latest release from GitHub, the dependencies should automatically download. If they don't, run this:
+```
+python -m pip install -r source/dependencies/requirements.txt
+```
 
 Then, load the shell by running:
 ```
