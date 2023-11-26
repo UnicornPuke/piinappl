@@ -1169,14 +1169,14 @@ class Parser:
             start = res.register(self.expr())
             if res.error:
                 return res
-            if not self.current_tok.matches(TT_KEYWORD, 'to'):
-                return res.failure(Error(self.current_tok.pos_start, self.current_tok.pos_end, 201, 'To'))
-            
-            res.register_advancement()
-            self.advance()
-            end = res.register(self.expr())
-            if res.error:
-                return res
+            if self.current_tok.matches(TT_KEYWORD, 'to'):
+                res.register_advancement()
+                self.advance()
+                end = res.register(self.expr())
+                if res.error:
+                    return res
+            else:
+                end = None
             
             if self.current_tok.matches(TT_KEYWORD, 'step'):
                 res.register_advancement()
@@ -2104,7 +2104,7 @@ class Class:
         self.built_in = ["type", "name"]
         self.attributes = {}
         self.extras = {}
-        self.type = "Class Object"
+        self.type = "Class"
         
     def attribute(self,child):
         self.attributes = {"name": String(self.name), "type": String("Class Object")}
@@ -2300,7 +2300,7 @@ class ClassInstance(Class):
         self.arg_names = []
         self.built_in = ["type", "name"]
         self.attributes = {}
-        self.type = "Class Instance"
+        self.type = "ClassInstance"
 
     def copy(self):
         copy = ClassInstance(self.name, self.body_node)
@@ -2374,7 +2374,7 @@ class Function(BaseFunction):
 class BuiltInFunction(BaseFunction):
     def __init__(self, name):
         super().__init__(name)
-        self.type = "Function"
+        self.type = "BuiltInFunction"
         
     def no_visit_method(self, node, context):
         raise Exception(f'[INTERNAL] Error code 402 - No execute method defnied: {type(node).__name__}')
@@ -3270,14 +3270,14 @@ class Interpreter:
         elements = []
 
         start_value = res.register(self.visit(node.start_value_node, context))
-        if not isinstance(start_value, Number) or isinstance(start_value.value, float):
+        if not (isinstance(start_value, Number) or isinstance(start_value, String) or isinstance(start_value, List)) or isinstance(start_value.value, float):
             return res.failure(Error(node.start_value_node.pos_start, node.start_value_node.pos_end, 306, node.start_value_node, context))
         if res.should_return(): return res
-
-        end_value = res.register(self.visit(node.end_value_node, context))
-        if not isinstance(end_value, Number) or isinstance(end_value.value, float):
-            return res.failure(Error(node.end_value_node.pos_start, node.end_value_node.pos_end, 306, node.end_value_node, context))
-        if res.should_return(): return res
+        if node.end_value_node:
+            end_value = res.register(self.visit(node.end_value_node, context))
+            if not isinstance(end_value, Number) or isinstance(end_value.value, float):
+                return res.failure(Error(node.end_value_node.pos_start, node.end_value_node.pos_end, 306, node.end_value_node, context))
+            if res.should_return(): return res
 
         if node.step_value_node:
             step_value = res.register(self.visit(node.step_value_node, context))
@@ -3288,15 +3288,41 @@ class Interpreter:
             step_value = Number(1)
 
         i = start_value.value
-
-        if step_value.value >= 0:
-            condition = lambda: i < end_value.value
+        if node.end_value_node:
+            if not isinstance(start_value, Number) or isinstance(end_value.value, float):
+                return res.failure(Error(node.start_value_node.pos_start, node.start_value_node.pos_end, 306, node.start_value_node, context))
+            if step_value.value >= 0:
+                condition = lambda: i < end_value.value
+            else:
+                condition = lambda: i > end_value.value
+            tree = Number(7)
         else:
-            condition = lambda: i > end_value.value
+            if not (isinstance(start_value, String) or isinstance(start_value, List)):
+                return res.failure(Error(node.start_value_node.pos_start, node.start_value_node.pos_end, 306, node.start_value_node, context))
+            thing = -1
+            tree = list(i)[-1]
+            if step_value.value >= 0:
+                condition = lambda: thing + 1 < len(list(i))
+            else:
+                condition = lambda: thing + 1 > len(list(i))
             
         while condition():
-            context.symbol_table.set_(node.var_name_tok.value, Number(i))
-            i += step_value.value
+            if isinstance(i, str):
+                potato = "String"
+            elif isinstance(i, int) or isinstance(i, float):
+                potato = "Number"
+            else:
+                potato = tree.type
+            if node.end_value_node:
+                i += step_value.value
+                tree = i
+            else:
+                thing += step_value.value
+                tree = list(i)[thing]
+            if not isinstance(tree, String):
+                exec(f"context.symbol_table.set_(node.var_name_tok.value, {potato}(tree))")
+            else:
+                exec(f"context.symbol_table.set_(node.var_name_tok.value, {potato}(tree.value))")
 
             value = res.register(self.visit(node.body_node, context))
             if res.should_return() and res.loop_should_continue == False and res.loop_should_break == False: return res
@@ -3479,7 +3505,6 @@ global_symbol_table.set_("True", Boolean.true)
 global_symbol_table.set_("False", Boolean.false)
 global_symbol_table.set_("None", NoneType())
 global_symbol_table.set_("print", BuiltInFunction.print)
-global_symbol_table.set_("factorial", BuiltInFunction.factorial)
         
 def run(text, fn):
     lexer = Lexer(fn, text)
